@@ -84,6 +84,30 @@ class ResultStore:
             results.append(data)
         return results
 
+    def get_recent(self, limit: int = 20) -> list[dict]:
+        """Get the most recently updated results."""
+        rows = self.conn.execute(
+            "SELECT file_path, status, error_message, updated_at FROM results "
+            "ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_today_stats(self) -> dict:
+        """Get today's completed and failed counts."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        row = self.conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as completed, "
+            "SUM(CASE WHEN status = 'failed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as failed "
+            "FROM results",
+            (today + "%", today + "%"),
+        ).fetchone()
+        return {
+            "completed_today": row["completed"] or 0,
+            "failed_today": row["failed"] or 0,
+        }
+
     def get_summary(self) -> dict:
         rows = self.conn.execute(
             "SELECT status, COUNT(*) as cnt FROM results GROUP BY status"

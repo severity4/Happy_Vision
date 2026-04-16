@@ -10,6 +10,10 @@ DEFAULT_CONFIG = {
     "concurrency": 5,
     "write_metadata": False,
     "skip_existing": False,
+    "watch_folder": "",
+    "watch_enabled": False,
+    "watch_concurrency": 1,
+    "watch_interval": 10,
 }
 
 
