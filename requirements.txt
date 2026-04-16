@@ -3,3 +3,4 @@ google-genai>=1.0
 pyexiftool>=0.5
 click>=8.1
 tqdm>=4.66
+Pillow>=10.0

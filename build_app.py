@@ -53,6 +53,7 @@ def build_app():
     # Collect all data files
     added_data = [
         f"{PROJECT_DIR / 'frontend' / 'dist'}:frontend/dist",
+        f"{PROJECT_DIR / 'VERSION'}:.",
     ]
 
     # Add exiftool lib directory if it exists (Homebrew layout)
@@ -140,7 +141,7 @@ wait $SERVER_PID
     launcher.chmod(0o755)
 
     print(f"\n{'='*50}")
-    print(f"BUILD COMPLETE!")
+    print("BUILD COMPLETE!")
     print(f"{'='*50}")
     print(f"App: {DIST_DIR / APP_NAME}")
     print(f"Launcher: {launcher}")

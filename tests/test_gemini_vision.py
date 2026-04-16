@@ -1,16 +1,21 @@
 """tests/test_gemini_vision.py"""
 
-import base64
+import io
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+from PIL import Image
 
 from modules.gemini_vision import (
     build_prompt,
     parse_response,
     analyze_photo,
+    resize_for_api,
     ANALYSIS_SCHEMA,
     MODEL_MAP,
+    CATEGORY_ENUM,
+    MOOD_ENUM,
 )
 
 
@@ -67,20 +72,43 @@ def test_parse_response_handles_garbage():
     assert result is None
 
 
+def _create_test_jpg(path, width=100, height=100):
+    """Create a valid JPEG file for testing."""
+    img = Image.new("RGB", (width, height), color="red")
+    img.save(path, format="JPEG")
+
+
+def test_resize_for_api_small_image():
+    """Images smaller than MAX_IMAGE_SIZE should not be resized."""
+    img = Image.new("RGB", (1000, 800), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    original = buf.getvalue()
+    result = resize_for_api(original)
+    assert result == original
+
+
+def test_resize_for_api_large_image():
+    """Images larger than MAX_IMAGE_SIZE should be resized."""
+    img = Image.new("RGB", (6000, 4000), color="green")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    result = resize_for_api(buf.getvalue(), max_size=3072)
+    resized = Image.open(io.BytesIO(result))
+    assert max(resized.size) == 3072
+    assert resized.size == (3072, 2048)
+
+
+def test_category_and_mood_enums():
+    assert "ceremony" in CATEGORY_ENUM
+    assert "other" in CATEGORY_ENUM
+    assert "formal" in MOOD_ENUM
+    assert "neutral" in MOOD_ENUM
+
+
 def test_analyze_photo_calls_gemini(tmp_path):
-    # Create a tiny test JPG (1x1 pixel)
     img_path = tmp_path / "test.jpg"
-    img_path.write_bytes(
-        b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00'
-        b'\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t'
-        b'\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a'
-        b'\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342'
-        b'\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00'
-        b'\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00'
-        b'\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b'
-        b'\xff\xda\x00\x08\x01\x01\x00\x00?\x00T\xdb\x9e\xa7\xa8\xa4'
-        b'\xff\xd9'
-    )
+    _create_test_jpg(img_path)
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({

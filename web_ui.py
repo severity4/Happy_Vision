@@ -22,9 +22,16 @@ app.register_blueprint(results_bp)
 app.register_blueprint(export_bp)
 
 
+def _get_version() -> str:
+    version_file = _get_bundle_dir() / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+    return "dev"
+
+
 @app.route("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": _get_version()}
 
 
 @app.route("/api/photo")
@@ -64,4 +71,4 @@ if __name__ == "__main__":
         import webbrowser
         import threading
         threading.Timer(2, lambda: webbrowser.open("http://localhost:8081")).start()
-    app.run(host="0.0.0.0", port=8081, debug=not is_frozen)
+    app.run(host="127.0.0.1", port=8081, debug=not is_frozen)
