@@ -123,7 +123,7 @@ def run_pipeline(
         # save_result guarantees the photo has the IPTC marker on disk.
         if result and batch is not None:
             args = build_exiftool_args(result) + ["-overwrite_original"]
-            if args and not batch.write(photo_path, args):
+            if not batch.write(photo_path, args):
                 result = None  # treat metadata failure as a full failure
 
         with lock:

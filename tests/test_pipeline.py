@@ -211,3 +211,39 @@ def test_pipeline_metadata_failure_marks_failed(tmp_path, monkeypatch):
 
     assert len(errors) == 1
     assert "metadata" in errors[0][1].lower()
+
+
+def test_pipeline_does_not_create_batch_when_metadata_disabled(tmp_path, monkeypatch):
+    """When write_metadata=False, ExiftoolBatch must never be instantiated."""
+    from modules import pipeline as pl
+
+    (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    monkeypatch.setattr(
+        pl, "analyze_photo",
+        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
+                            "category": "other", "scene_type": "indoor",
+                            "mood": "neutral", "people_count": 0},
+    )
+
+    instantiated = {"n": 0}
+
+    class SpyBatch:
+        def __init__(self):
+            instantiated["n"] += 1
+        def write(self, *a, **kw): return True
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    monkeypatch.setattr(pl, "ExiftoolBatch", SpyBatch)
+
+    pl.run_pipeline(
+        folder=str(tmp_path),
+        api_key="test",
+        concurrency=1,
+        write_metadata=False,
+        db_path=tmp_path / "r.db",
+    )
+
+    assert instantiated["n"] == 0
