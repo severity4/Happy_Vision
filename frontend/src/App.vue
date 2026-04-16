@@ -107,13 +107,13 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { useWatchStore } from './stores/watch'
+
+const watchStore = useWatchStore()
 
 const version = ref('')
 const navLinks = [
-  { to: '/', name: 'import', label: '匯入' },
-  { to: '/watch', name: 'watch', label: '監控' },
-  { to: '/progress', name: 'progress', label: '進度' },
-  { to: '/results', name: 'results', label: '結果' },
+  { to: '/', name: 'monitor', label: '監控' },
   { to: '/settings', name: 'settings', label: '設定' },
 ]
 
@@ -187,12 +187,16 @@ onMounted(async () => {
     version.value = data.version || ''
   } catch {}
 
+  // Initialize watch store (fetch status, recent, connect SSE)
+  watchStore.init()
+
   // Check for updates after a short delay (don't block startup)
   setTimeout(checkForUpdate, 2000)
 })
 
 onUnmounted(() => {
   stopPolling()
+  watchStore.disconnectSSE()
 })
 </script>
 

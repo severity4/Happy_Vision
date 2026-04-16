@@ -21,7 +21,15 @@ def get_settings():
 def update_settings():
     data = request.get_json()
     config = load_config()
-    for key in ["model", "concurrency", "write_metadata", "skip_existing"]:
+    for key in [
+        "model",
+        "concurrency",
+        "write_metadata",
+        "skip_existing",
+        "watch_folder",
+        "watch_concurrency",
+        "watch_interval",
+    ]:
         if key in data:
             config[key] = data[key]
     if "gemini_api_key" in data and not data["gemini_api_key"].startswith("..."):

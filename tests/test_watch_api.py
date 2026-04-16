@@ -122,3 +122,89 @@ def test_recent_returns_list(client):
     res = client.get("/api/watch/recent?limit=5")
     assert res.status_code == 200
     assert isinstance(res.get_json(), list)
+
+
+def test_enqueue_requires_folder(client):
+    res = client.post("/api/watch/enqueue", json={})
+    assert res.status_code == 400
+    assert "folder" in res.get_json()["error"]
+
+
+def test_enqueue_rejects_invalid_folder(client):
+    res = client.post("/api/watch/enqueue", json={"folder": "/nonexistent/xyz"})
+    assert res.status_code == 400
+    assert "not accessible" in res.get_json()["error"]
+
+
+def test_enqueue_requires_api_key(client, tmp_path):
+    with patch("api.watch.load_config", return_value={"gemini_api_key": ""}):
+        res = client.post("/api/watch/enqueue", json={"folder": str(tmp_path)})
+        assert res.status_code == 400
+        assert "API key" in res.get_json()["error"]
+
+
+def test_enqueue_autostarts_watcher_when_stopped(client, tmp_path):
+    """If watcher is stopped, enqueue should auto-start it using configured folder."""
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    enqueue_dir = tmp_path / "enqueue"
+    enqueue_dir.mkdir()
+    (enqueue_dir / "photo.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+    with patch("api.watch.load_config", return_value={
+        "gemini_api_key": "test-key",
+        "watch_folder": str(watch_dir),
+        "watch_concurrency": 1,
+        "watch_interval": 3600,
+        "model": "lite",
+    }):
+        with patch("modules.folder_watcher.load_config", return_value={
+            "gemini_api_key": "test-key",
+            "watch_concurrency": 1,
+            "watch_interval": 3600,
+            "model": "lite",
+        }):
+            with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
+                with patch("modules.folder_watcher.file_size_stable", return_value=True):
+                    with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
+                        with patch("modules.folder_watcher.write_metadata", return_value=True):
+                            res = client.post("/api/watch/enqueue", json={"folder": str(enqueue_dir)})
+                            assert res.status_code == 200
+                            data = res.get_json()
+                            assert "enqueued" in data
+                            assert "skipped" in data
+                            # Watcher should be running now
+                            import api.watch as watch_mod
+                            assert watch_mod._watcher.state == "watching"
+
+
+def test_enqueue_returns_counts(client, tmp_path):
+    """Enqueue should report enqueued + skipped counts from the specified folder."""
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    enqueue_dir = tmp_path / "enqueue"
+    enqueue_dir.mkdir()
+    (enqueue_dir / "new.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+    with patch("api.watch.load_config", return_value={
+        "gemini_api_key": "test-key",
+        "watch_folder": str(watch_dir),
+        "watch_concurrency": 1,
+        "watch_interval": 3600,
+        "model": "lite",
+    }):
+        with patch("modules.folder_watcher.load_config", return_value={
+            "gemini_api_key": "test-key",
+            "watch_concurrency": 1,
+            "watch_interval": 3600,
+            "model": "lite",
+        }):
+            with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
+                with patch("modules.folder_watcher.file_size_stable", return_value=True):
+                    with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
+                        with patch("modules.folder_watcher.write_metadata", return_value=True):
+                            res = client.post("/api/watch/enqueue", json={"folder": str(enqueue_dir)})
+                            assert res.status_code == 200
+                            data = res.get_json()
+                            assert data["enqueued"] == 1
+                            assert data["skipped"] == 0

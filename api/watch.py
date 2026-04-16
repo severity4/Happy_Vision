@@ -203,3 +203,42 @@ def watch_recent():
     recent = store.get_recent(limit=limit)
     store.close()
     return jsonify(recent)
+
+
+@watch_bp.route("/enqueue", methods=["POST"])
+def enqueue_folder():
+    """Manually enqueue a folder's unprocessed photos into the watch queue.
+
+    If the watcher is stopped, it auto-starts using the configured watch folder
+    (or the enqueued folder as a fallback) so the queue gets processed.
+    """
+    data = request.get_json() or {}
+    folder = data.get("folder", "")
+    if not folder:
+        return jsonify({"error": "folder is required"}), 400
+
+    from pathlib import Path
+    if not Path(folder).is_dir():
+        return jsonify({"error": "Folder not accessible"}), 400
+
+    config = load_config()
+    if not config.get("gemini_api_key"):
+        return jsonify({"error": "Gemini API key not configured"}), 400
+
+    watcher = get_watcher()
+
+    # Auto-start watcher if stopped — use configured watch_folder,
+    # falling back to the enqueued folder itself.
+    if watcher.state == "stopped":
+        start_folder = config.get("watch_folder") or folder
+        try:
+            watcher.start(folder=start_folder)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    try:
+        enqueued, skipped = watcher.enqueue_folder(folder)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"enqueued": enqueued, "skipped": skipped})

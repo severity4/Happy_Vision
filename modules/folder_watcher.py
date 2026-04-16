@@ -207,9 +207,28 @@ class FolderWatcher:
             self._stop_event.wait(timeout=self._interval)
 
     def _scan_and_enqueue(self) -> None:
-        """Scan folder and add unprocessed photos to queue."""
-        all_photos = _scan_recursive(self._folder)
-        new_count = 0
+        """Scan the current watch folder and add unprocessed photos to queue."""
+        enqueued, _ = self._scan_folder_into_queue(self._folder)
+        if enqueued > 0:
+            log.info("Enqueued %d new photos (queue size: %d)", enqueued, self._queue.qsize())
+
+    def enqueue_folder(self, folder: str) -> tuple[int, int]:
+        """Scan a folder once and enqueue unprocessed photos. Returns (enqueued, skipped).
+
+        Unlike `_scan_and_enqueue`, this does NOT add the folder to the polling loop;
+        it is a one-shot enqueue into the existing worker queue.
+        """
+        if not Path(folder).is_dir():
+            raise ValueError(f"Folder not accessible: {folder}")
+        if self._store is None:
+            self._store = ResultStore()
+        return self._scan_folder_into_queue(folder)
+
+    def _scan_folder_into_queue(self, folder: str) -> tuple[int, int]:
+        """Scan the given folder and enqueue unprocessed photos. Returns (enqueued, skipped)."""
+        all_photos = _scan_recursive(folder)
+        enqueued = 0
+        skipped = 0
 
         for photo_path in all_photos:
             if self._stop_event.is_set():
@@ -218,6 +237,7 @@ class FolderWatcher:
             # Fast path: check local DB first
             status = self._store.get_status(photo_path)
             if status == "completed":
+                skipped += 1
                 continue
 
             # For unknown or failed files, check IPTC (cross-machine dedup)
@@ -229,19 +249,20 @@ class FolderWatcher:
                             "file_path": photo_path,
                             "source": "external",
                         })
+                        skipped += 1
                         continue
                 except Exception:
                     log.warning("Cannot read IPTC for %s, will try to process", photo_path)
 
             # Check file readiness
             if not file_size_stable(photo_path):
+                skipped += 1
                 continue
 
             self._queue.put(photo_path)
-            new_count += 1
+            enqueued += 1
 
-        if new_count > 0:
-            log.info("Enqueued %d new photos (queue size: %d)", new_count, self._queue.qsize())
+        return enqueued, skipped
 
     def _worker_loop(self) -> None:
         """Process photos from the queue."""

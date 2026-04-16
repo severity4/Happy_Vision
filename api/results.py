@@ -16,6 +16,16 @@ def get_results():
     return jsonify({"results": results, "summary": summary})
 
 
+@results_bp.route("/<path:file_path>", methods=["GET"])
+def get_result(file_path):
+    with ResultStore() as store:
+        result = store.get_result(f"/{file_path}")
+    if result is None:
+        return jsonify({"error": "Result not found"}), 404
+    result["file_path"] = f"/{file_path}"
+    return jsonify(result)
+
+
 @results_bp.route("/<path:file_path>", methods=["PUT"])
 def update_result(file_path):
     data = request.get_json()
