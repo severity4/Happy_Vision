@@ -75,8 +75,10 @@ def main(folder, model, concurrency, output, fmt, write_metadata, skip_existing,
         output_dir = Path(output)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Only export results for photos in this folder
+        folder_paths = set(str(p) for p in Path(folder).rglob("*") if p.is_file())
         store = ResultStore()
-        all_results = store.get_all_results()
+        all_results = [r for r in store.get_all_results() if r["file_path"] in folder_paths]
         store.close()
 
         formats = [f.strip() for f in fmt.split(",")]

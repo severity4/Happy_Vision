@@ -152,12 +152,14 @@ def run_pipeline(
                     break
                 future.result()
 
-    # Write metadata if requested
+    # Write metadata only for photos in this folder (not all historical results)
     if write_metadata and results:
         from modules.metadata_writer import write_metadata as write_meta
 
+        folder_paths = set(photos)
         for r in store.get_all_results():
-            write_meta(r["file_path"], r)
+            if r["file_path"] in folder_paths:
+                write_meta(r["file_path"], r)
 
     store.close()
     callbacks.on_complete(total, failed_count)
