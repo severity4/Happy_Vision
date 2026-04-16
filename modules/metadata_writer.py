@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from modules.logger import setup_logger
@@ -107,3 +108,85 @@ def has_happy_vision_tag(photo_path: str) -> bool:
     metadata = read_metadata(photo_path)
     instructions = metadata.get("Instructions", "")
     return "HappyVisionProcessed" in str(instructions)
+
+
+class ExiftoolBatch:
+    """Persistent exiftool process using -stay_open mode.
+
+    One exiftool invocation handles many files via stdin, avoiding
+    ~200ms Perl startup per photo. Instances are thread-safe.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._proc = subprocess.Popen(
+            [_get_exiftool_cmd(), "-stay_open", "True", "-@", "-"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+    def _run_batch(self, args: list[str]) -> tuple[bool, str]:
+        """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
+        with self._lock:
+            for arg in args:
+                self._proc.stdin.write(arg + "\n")
+            self._proc.stdin.write("-execute\n")
+            self._proc.stdin.flush()
+
+            output_lines = []
+            while True:
+                line = self._proc.stdout.readline()
+                if not line:
+                    return False, "".join(output_lines)  # process died
+                if line.strip() == "{ready}":
+                    break
+                output_lines.append(line)
+
+        output = "".join(output_lines)
+        ok = "Error" not in output and "error" not in output.lower()
+        return ok, output
+
+    def write(self, photo_path: str, args: list[str]) -> bool:
+        """Run exiftool args against photo_path. Returns True on success."""
+        ok, output = self._run_batch(args + [photo_path])
+        if not ok:
+            log.error("exiftool batch write failed for %s: %s", photo_path, output.strip())
+        return ok
+
+    def read_json(self, photo_path: str, tags: list[str] | None = None) -> dict:
+        """Read metadata as JSON. Returns {} on failure."""
+        args = ["-j"]
+        if tags:
+            args.extend(tags)
+        args.append(photo_path)
+        ok, output = self._run_batch(args)
+        if not ok:
+            return {}
+        try:
+            data = json.loads(output)
+            return data[0] if isinstance(data, list) and data else {}
+        except (json.JSONDecodeError, IndexError):
+            return {}
+
+    def close(self):
+        with self._lock:
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.stdin.write("-stay_open\nFalse\n")
+                    self._proc.stdin.flush()
+                except (BrokenPipeError, ValueError):
+                    pass
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+            self._proc = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
