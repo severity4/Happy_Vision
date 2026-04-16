@@ -93,6 +93,8 @@ def build_app():
         "--hidden-import=api.analysis",
         "--hidden-import=api.results",
         "--hidden-import=api.export",
+        "--hidden-import=api.update",
+        "--hidden-import=modules.updater",
         "--hidden-import=google.genai",
         "--hidden-import=google.genai.types",
         "--hidden-import=webview",

@@ -12,6 +12,8 @@ from api.analysis import analysis_bp
 from api.export import export_bp
 from api.results import results_bp
 from api.settings import settings_bp
+from api.update import update_bp
+from api.watch import watch_bp, auto_start_watcher
 
 app = Flask(__name__)
 
@@ -20,6 +22,11 @@ app.register_blueprint(settings_bp)
 app.register_blueprint(analysis_bp)
 app.register_blueprint(results_bp)
 app.register_blueprint(export_bp)
+app.register_blueprint(watch_bp)
+app.register_blueprint(update_bp)
+
+# Auto-start watch folder if previously enabled
+auto_start_watcher()
 
 
 def _get_version() -> str:
