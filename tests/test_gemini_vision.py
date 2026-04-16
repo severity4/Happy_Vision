@@ -132,3 +132,25 @@ def test_analyze_photo_calls_gemini(tmp_path):
         result = analyze_photo(str(img_path), api_key="fake-key", model="lite")
 
     assert result["title"] == "Test photo"
+
+
+def test_client_cache_reuses_instance(monkeypatch):
+    """Calling _get_client twice with same key returns same instance."""
+    from modules import gemini_vision
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, api_key):
+            created.append(api_key)
+
+    monkeypatch.setattr(gemini_vision.genai, "Client", FakeClient)
+    gemini_vision._client_cache.clear()
+
+    c1 = gemini_vision._get_client("key-abc")
+    c2 = gemini_vision._get_client("key-abc")
+    c3 = gemini_vision._get_client("key-xyz")
+
+    assert c1 is c2
+    assert c1 is not c3
+    assert created == ["key-abc", "key-xyz"]

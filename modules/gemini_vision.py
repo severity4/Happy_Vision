@@ -2,6 +2,7 @@
 
 import io
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -12,6 +13,20 @@ from PIL import Image
 from modules.logger import setup_logger
 
 log = setup_logger("gemini_vision")
+
+# Module-level cache: one genai.Client per api_key, reused across calls.
+_client_cache: dict[str, genai.Client] = {}
+_client_cache_lock = threading.Lock()
+
+
+def _get_client(api_key: str) -> genai.Client:
+    with _client_cache_lock:
+        client = _client_cache.get(api_key)
+        if client is None:
+            client = genai.Client(api_key=api_key)
+            _client_cache[api_key] = client
+        return client
+
 
 MODEL_MAP = {
     "lite": "gemini-2.5-flash-lite",
@@ -143,7 +158,7 @@ def analyze_photo(
     photo_bytes = resize_for_api(photo_bytes)
     prompt = build_prompt()
 
-    client = genai.Client(api_key=api_key)
+    client = _get_client(api_key)
 
     for attempt in range(max_retries):
         try:
