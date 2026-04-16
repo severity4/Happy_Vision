@@ -25,8 +25,12 @@ app.register_blueprint(export_bp)
 app.register_blueprint(watch_bp)
 app.register_blueprint(update_bp)
 
-# Auto-start watch folder if previously enabled
-auto_start_watcher()
+# Auto-start watch folder if previously enabled.
+# In dev (debug=True) Werkzeug's reloader forks: parent has no WERKZEUG_RUN_MAIN;
+# child has it set to "true". Only start in child.
+# In production (frozen .app) debug is False and there's no reloader.
+if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    auto_start_watcher()
 
 
 def _get_version() -> str:
