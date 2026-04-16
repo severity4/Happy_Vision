@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, request, send_file, send_from_directory  # noqa: E402
+from flask import Flask, jsonify, request, send_file, send_from_directory  # noqa: E402
 
 from api.analysis import analysis_bp
 from api.export import export_bp
@@ -32,6 +32,35 @@ def _get_version() -> str:
 @app.route("/api/health")
 def health():
     return {"status": "ok", "version": _get_version()}
+
+
+@app.route("/api/browse")
+def browse_folder():
+    """Browse filesystem folders for the folder picker UI."""
+    folder = request.args.get("path", str(Path.home()))
+    p = Path(folder)
+    if not p.is_dir():
+        return jsonify({"error": "Not a directory"}), 400
+
+    items = []
+    try:
+        for child in sorted(p.iterdir()):
+            if child.name.startswith("."):
+                continue
+            if child.is_dir():
+                items.append({"name": child.name, "path": str(child), "type": "folder"})
+            elif child.suffix.lower() in {".jpg", ".jpeg"}:
+                items.append({"name": child.name, "path": str(child), "type": "photo"})
+    except PermissionError:
+        return jsonify({"error": "Permission denied"}), 403
+
+    photo_count = sum(1 for i in items if i["type"] == "photo")
+    return jsonify({
+        "current": str(p),
+        "parent": str(p.parent) if p != p.parent else None,
+        "items": items,
+        "photo_count": photo_count,
+    })
 
 
 @app.route("/api/photo")
