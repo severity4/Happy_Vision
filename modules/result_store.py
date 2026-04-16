@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -15,9 +16,13 @@ class ResultStore:
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._init_db()
 
     def _init_db(self):
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA synchronous = NORMAL")
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS results (
                 file_path TEXT PRIMARY KEY,
@@ -28,17 +33,20 @@ class ResultStore:
                 updated_at TEXT NOT NULL
             )
         """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_status ON results(status)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_updated_at ON results(updated_at DESC)")
         self.conn.commit()
 
     def save_result(self, file_path: str, result: dict) -> None:
         now = datetime.now().isoformat()
-        self.conn.execute(
-            """INSERT OR REPLACE INTO results
-               (file_path, status, result_json, created_at, updated_at)
-               VALUES (?, 'completed', ?, ?, ?)""",
-            (file_path, json.dumps(result, ensure_ascii=False), now, now),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO results
+                   (file_path, status, result_json, created_at, updated_at)
+                   VALUES (?, 'completed', ?, ?, ?)""",
+                (file_path, json.dumps(result, ensure_ascii=False), now, now),
+            )
+            self.conn.commit()
 
     def get_result(self, file_path: str) -> dict | None:
         row = self.conn.execute(
@@ -58,13 +66,14 @@ class ResultStore:
 
     def mark_failed(self, file_path: str, error_message: str) -> None:
         now = datetime.now().isoformat()
-        self.conn.execute(
-            """INSERT OR REPLACE INTO results
-               (file_path, status, error_message, created_at, updated_at)
-               VALUES (?, 'failed', ?, ?, ?)""",
-            (file_path, error_message, now, now),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO results
+                   (file_path, status, error_message, created_at, updated_at)
+                   VALUES (?, 'failed', ?, ?, ?)""",
+                (file_path, error_message, now, now),
+            )
+            self.conn.commit()
 
     def get_status(self, file_path: str) -> str | None:
         row = self.conn.execute(
@@ -124,11 +133,12 @@ class ResultStore:
             return
         existing.update(updates)
         now = datetime.now().isoformat()
-        self.conn.execute(
-            "UPDATE results SET result_json = ?, updated_at = ? WHERE file_path = ?",
-            (json.dumps(existing, ensure_ascii=False), now, file_path),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE results SET result_json = ?, updated_at = ? WHERE file_path = ?",
+                (json.dumps(existing, ensure_ascii=False), now, file_path),
+            )
+            self.conn.commit()
 
     def get_results_for_folder(self, folder: str) -> list[dict]:
         """Get completed results for photos within a specific folder."""

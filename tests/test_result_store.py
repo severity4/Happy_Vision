@@ -121,3 +121,45 @@ def test_get_results_for_folder(tmp_path):
         results_b = store.get_results_for_folder("/photos/event_b")
         assert len(results_b) == 1
         assert results_b[0]["title"] == "B1"
+
+
+def test_wal_mode_enabled(tmp_path):
+    store = ResultStore(tmp_path / "test.db")
+    mode = store.conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+    store.close()
+
+
+def test_index_exists(tmp_path):
+    store = ResultStore(tmp_path / "test.db")
+    rows = store.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='results'"
+    ).fetchall()
+    index_names = {r["name"] for r in rows}
+    assert "idx_results_status" in index_names
+    assert "idx_results_updated_at" in index_names
+    store.close()
+
+
+def test_concurrent_writes_do_not_deadlock(tmp_path):
+    """Two threads saving results simultaneously must not raise OperationalError."""
+    import threading
+    store = ResultStore(tmp_path / "test.db")
+    errors = []
+
+    def writer(prefix):
+        try:
+            for i in range(50):
+                store.save_result(f"/photos/{prefix}_{i:03d}.jpg", {"title": f"{prefix}{i}"})
+        except Exception as e:
+            errors.append(e)
+
+    t1 = threading.Thread(target=writer, args=("A",))
+    t2 = threading.Thread(target=writer, args=("B",))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert errors == []
+    results = store.get_all_results()
+    assert len(results) == 100
+    store.close()
