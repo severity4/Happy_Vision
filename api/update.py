@@ -13,6 +13,7 @@ from modules.updater import (
 )
 
 update_bp = Blueprint("update", __name__, url_prefix="/api/update")
+_download_lock = threading.Lock()
 
 
 @update_bp.route("/check", methods=["POST"])
@@ -38,8 +39,18 @@ def download():
     if state["status"] != "available":
         return jsonify({"error": "沒有可用的更新"}), 400
 
-    # Run download in background thread
-    threading.Thread(target=download_and_install, daemon=True).start()
+    # Try to acquire the lock without blocking; if someone else already
+    # triggered a download, return 409 instead of spawning a second thread.
+    if not _download_lock.acquire(blocking=False):
+        return jsonify({"error": "更新下載已在進行中"}), 409
+
+    def _run():
+        try:
+            download_and_install()
+        finally:
+            _download_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
     return jsonify({"status": "downloading"})
 
 
