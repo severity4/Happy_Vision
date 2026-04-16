@@ -55,7 +55,7 @@ def build_exiftool_args(result: dict) -> list[str]:
     return args
 
 
-def write_metadata(photo_path: str, result: dict, backup: bool = True) -> bool:
+def write_metadata(photo_path: str, result: dict, backup: bool = False) -> bool:
     """Write analysis result as IPTC/XMP metadata into a photo file."""
     path = Path(photo_path)
     if not path.exists():
