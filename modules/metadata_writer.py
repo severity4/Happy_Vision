@@ -1,12 +1,23 @@
 """modules/metadata_writer.py — IPTC/XMP metadata read/write via exiftool"""
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from modules.logger import setup_logger
 
 log = setup_logger("metadata_writer")
+
+
+def _get_exiftool_cmd() -> str:
+    """Find exiftool binary, checking PyInstaller bundle first."""
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys._MEIPASS) / "exiftool"
+        if bundled.exists():
+            return str(bundled)
+    return "exiftool"
 
 
 def build_exiftool_args(result: dict) -> list[str]:
@@ -55,7 +66,7 @@ def write_metadata(photo_path: str, result: dict, backup: bool = True) -> bool:
     if not args:
         return True
 
-    cmd = ["exiftool"]
+    cmd = [_get_exiftool_cmd()]
     if not backup:
         cmd.append("-overwrite_original")
     cmd.extend(args)
@@ -80,7 +91,7 @@ def read_metadata(photo_path: str) -> dict:
     """Read existing IPTC/XMP metadata from a photo."""
     try:
         proc = subprocess.run(
-            ["exiftool", "-json", "-IPTC:all", "-XMP:all", str(photo_path)],
+            [_get_exiftool_cmd(), "-json", "-IPTC:all", "-XMP:all", str(photo_path)],
             capture_output=True, text=True, timeout=15,
         )
         if proc.returncode == 0:

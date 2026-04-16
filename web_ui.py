@@ -37,7 +37,14 @@ def serve_photo():
 
 
 # Serve Vue frontend in production
-DIST_DIR = Path(__file__).parent / "frontend" / "dist"
+# PyInstaller sets sys._MEIPASS to the temp directory where bundled files are extracted
+def _get_bundle_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+
+DIST_DIR = _get_bundle_dir() / "frontend" / "dist"
 
 
 @app.route("/", defaults={"path": ""})
@@ -52,4 +59,9 @@ def serve_frontend(path):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8081, debug=True)
+    is_frozen = getattr(sys, "frozen", False)
+    if is_frozen:
+        import webbrowser
+        import threading
+        threading.Timer(2, lambda: webbrowser.open("http://localhost:8081")).start()
+    app.run(host="0.0.0.0", port=8081, debug=not is_frozen)
