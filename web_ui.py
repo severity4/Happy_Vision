@@ -97,7 +97,23 @@ def serve_frontend(path):
 if __name__ == "__main__":
     is_frozen = getattr(sys, "frozen", False)
     if is_frozen:
-        import webbrowser
         import threading
-        threading.Timer(2, lambda: webbrowser.open("http://localhost:8081")).start()
-    app.run(host="127.0.0.1", port=8081, debug=not is_frozen)
+        import webview
+
+        # Start Flask in background thread
+        threading.Thread(
+            target=lambda: app.run(host="127.0.0.1", port=8081, debug=False),
+            daemon=True,
+        ).start()
+
+        # Open native window
+        webview.create_window(
+            f"Happy Vision v{_get_version()}",
+            "http://127.0.0.1:8081",
+            width=1200,
+            height=800,
+            min_size=(800, 600),
+        )
+        webview.start()
+    else:
+        app.run(host="127.0.0.1", port=8081, debug=True)

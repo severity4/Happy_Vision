@@ -63,12 +63,20 @@ def build_app():
     print(f"\nBuilding {APP_NAME}.app...")
     print(f"Data files: {added_data}")
 
+    # App icon
+    icon_path = PROJECT_DIR / "assets" / "HappyVision.icns"
+    if not icon_path.exists():
+        print("WARNING: Icon not found, using default. Run generate_icon.py first.")
+
+    icon_args = [f"--icon={icon_path}"] if icon_path.exists() else []
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", APP_NAME,
         "--onedir",
         "--windowed",
         "--noconfirm",
+        *icon_args,
         # Add exiftool binary
         f"--add-binary={exiftool_real}:.",
         # Hidden imports that PyInstaller might miss
@@ -87,6 +95,8 @@ def build_app():
         "--hidden-import=api.export",
         "--hidden-import=google.genai",
         "--hidden-import=google.genai.types",
+        "--hidden-import=webview",
+        "--hidden-import=webview.platforms.cocoa",
     ]
 
     # Add data files
