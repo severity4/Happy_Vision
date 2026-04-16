@@ -14,8 +14,8 @@ from modules.logger import setup_logger
 log = setup_logger("gemini_vision")
 
 MODEL_MAP = {
-    "lite": "gemini-2.0-flash-lite",
-    "flash": "gemini-2.5-flash-preview-05-20",
+    "lite": "gemini-2.5-flash-lite",
+    "flash": "gemini-2.5-flash",
 }
 
 # Max long edge before sending to Gemini (matches AnyVision default)
