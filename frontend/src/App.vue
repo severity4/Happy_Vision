@@ -160,7 +160,7 @@ function startPolling() {
         stopPolling()
       }
     } catch {}
-  }, 500)
+  }, 2000)
 }
 
 function stopPolling() {
@@ -178,6 +178,7 @@ async function restartApp() {
 
 function dismissUpdate() {
   update.show = false
+  stopPolling()
 }
 
 onMounted(async () => {
