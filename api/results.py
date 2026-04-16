@@ -2,6 +2,7 @@
 
 from flask import Blueprint, request, jsonify
 
+from modules.metadata_writer import write_metadata
 from modules.result_store import ResultStore
 
 results_bp = Blueprint("results", __name__, url_prefix="/api/results")
@@ -9,29 +10,24 @@ results_bp = Blueprint("results", __name__, url_prefix="/api/results")
 
 @results_bp.route("", methods=["GET"])
 def get_results():
-    store = ResultStore()
-    results = store.get_all_results()
-    summary = store.get_summary()
-    store.close()
+    with ResultStore() as store:
+        results = store.get_all_results()
+        summary = store.get_summary()
     return jsonify({"results": results, "summary": summary})
 
 
 @results_bp.route("/<path:file_path>", methods=["PUT"])
 def update_result(file_path):
     data = request.get_json()
-    store = ResultStore()
-    store.update_result(f"/{file_path}", data)
-    store.close()
+    with ResultStore() as store:
+        store.update_result(f"/{file_path}", data)
     return jsonify({"status": "ok"})
 
 
 @results_bp.route("/write-metadata", methods=["POST"])
 def write_all_metadata():
-    from modules.metadata_writer import write_metadata
-
-    store = ResultStore()
-    results = store.get_all_results()
-    store.close()
+    with ResultStore() as store:
+        results = store.get_all_results()
 
     success = 0
     failed = 0

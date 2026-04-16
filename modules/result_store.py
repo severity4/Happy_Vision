@@ -106,5 +106,26 @@ class ResultStore:
         )
         self.conn.commit()
 
+    def get_results_for_folder(self, folder: str) -> list[dict]:
+        """Get completed results for photos within a specific folder."""
+        folder_prefix = str(Path(folder).resolve())
+        rows = self.conn.execute(
+            "SELECT file_path, result_json FROM results WHERE status = 'completed' AND file_path LIKE ?",
+            (folder_prefix + "%",),
+        ).fetchall()
+        results = []
+        for row in rows:
+            data = json.loads(row["result_json"])
+            data["file_path"] = row["file_path"]
+            results.append(data)
+        return results
+
     def close(self):
         self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False

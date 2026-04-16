@@ -7,7 +7,7 @@ import threading
 from flask import Blueprint, request, jsonify, Response
 
 from modules.config import load_config
-from modules.pipeline import run_pipeline, get_pipeline_state, PipelineCallbacks
+from modules.pipeline import run_pipeline, PipelineCallbacks, PipelineState
 from modules.logger import setup_logger
 
 log = setup_logger("api_analysis")
@@ -17,6 +17,7 @@ analysis_bp = Blueprint("analysis", __name__, url_prefix="/api/analysis")
 _sse_queues: list[queue.Queue] = []
 _sse_lock = threading.Lock()
 _pipeline_thread: threading.Thread | None = None
+_pipeline_state: PipelineState | None = None
 
 
 def _broadcast_sse(event: str, data: dict):
@@ -45,7 +46,7 @@ class SSECallbacks(PipelineCallbacks):
 
 @analysis_bp.route("/start", methods=["POST"])
 def start_analysis():
-    global _pipeline_thread
+    global _pipeline_thread, _pipeline_state
     if _pipeline_thread and _pipeline_thread.is_alive():
         return jsonify({"error": "Analysis already running"}), 409
 
@@ -64,7 +65,11 @@ def start_analysis():
     skip_existing = data.get("skip_existing", config.get("skip_existing", False))
     write_metadata = data.get("write_metadata", config.get("write_metadata", False))
 
+    # Create state before starting thread so pause/cancel work immediately
+    _pipeline_state = PipelineState()
+
     def run():
+        global _pipeline_state
         run_pipeline(
             folder=folder,
             api_key=api_key,
@@ -73,7 +78,9 @@ def start_analysis():
             skip_existing=skip_existing,
             write_metadata=write_metadata,
             callbacks=SSECallbacks(),
+            state=_pipeline_state,
         )
+        _pipeline_state = None
 
     _pipeline_thread = threading.Thread(target=run, daemon=True)
     _pipeline_thread.start()
@@ -83,27 +90,24 @@ def start_analysis():
 
 @analysis_bp.route("/pause", methods=["POST"])
 def pause_analysis():
-    state = get_pipeline_state()
-    if state:
-        state.pause()
+    if _pipeline_state:
+        _pipeline_state.pause()
         return jsonify({"status": "paused"})
     return jsonify({"error": "No analysis running"}), 404
 
 
 @analysis_bp.route("/resume", methods=["POST"])
 def resume_analysis():
-    state = get_pipeline_state()
-    if state:
-        state.resume()
+    if _pipeline_state:
+        _pipeline_state.resume()
         return jsonify({"status": "resumed"})
     return jsonify({"error": "No analysis running"}), 404
 
 
 @analysis_bp.route("/cancel", methods=["POST"])
 def cancel_analysis():
-    state = get_pipeline_state()
-    if state:
-        state.cancel()
+    if _pipeline_state:
+        _pipeline_state.cancel()
         return jsonify({"status": "cancelled"})
     return jsonify({"error": "No analysis running"}), 404
 

@@ -94,3 +94,30 @@ def test_update_result(tmp_path):
     assert loaded["title"] == "New Title"
     assert loaded["keywords"] == ["a"]  # unchanged
     store.close()
+
+
+def test_context_manager(tmp_path):
+    with ResultStore(tmp_path / "test.db") as store:
+        store.save_result("/photos/IMG_001.jpg", {"title": "Test"})
+        assert store.is_processed("/photos/IMG_001.jpg")
+    # Connection should be closed after exiting context
+    # Reopening should still work
+    with ResultStore(tmp_path / "test.db") as store:
+        assert store.get_result("/photos/IMG_001.jpg")["title"] == "Test"
+
+
+def test_get_results_for_folder(tmp_path):
+    with ResultStore(tmp_path / "test.db") as store:
+        store.save_result("/photos/event_a/IMG_001.jpg", {"title": "A1"})
+        store.save_result("/photos/event_a/IMG_002.jpg", {"title": "A2"})
+        store.save_result("/photos/event_b/IMG_003.jpg", {"title": "B1"})
+        store.mark_failed("/photos/event_a/IMG_004.jpg", "error")
+
+        results_a = store.get_results_for_folder("/photos/event_a")
+        assert len(results_a) == 2
+        titles = {r["title"] for r in results_a}
+        assert titles == {"A1", "A2"}
+
+        results_b = store.get_results_for_folder("/photos/event_b")
+        assert len(results_b) == 1
+        assert results_b[0]["title"] == "B1"

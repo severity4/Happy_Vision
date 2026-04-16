@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from modules.gemini_vision import analyze_photo
+from modules.metadata_writer import write_metadata as write_meta
 from modules.result_store import ResultStore
 from modules.logger import setup_logger
 
@@ -64,14 +65,6 @@ class PipelineState:
         self.paused.wait()
 
 
-# Global pipeline state for API control
-_current_state: PipelineState | None = None
-
-
-def get_pipeline_state() -> PipelineState | None:
-    return _current_state
-
-
 def run_pipeline(
     folder: str,
     api_key: str,
@@ -81,11 +74,12 @@ def run_pipeline(
     write_metadata: bool = False,
     db_path: Path | str | None = None,
     callbacks: PipelineCallbacks | None = None,
+    state: PipelineState | None = None,
 ) -> list[dict]:
-    """Run the full analysis pipeline on a folder of photos."""
-    global _current_state
-    _current_state = PipelineState()
-    state = _current_state
+    """Run the full analysis pipeline on a folder of photos.
+    Pass a PipelineState to control pause/cancel from outside."""
+    if state is None:
+        state = PipelineState()
 
     if callbacks is None:
         callbacks = PipelineCallbacks()
@@ -152,17 +146,12 @@ def run_pipeline(
                     break
                 future.result()
 
-    # Write metadata only for photos in this folder (not all historical results)
+    # Write metadata only for photos in this folder
     if write_metadata and results:
-        from modules.metadata_writer import write_metadata as write_meta
-
-        folder_paths = set(photos)
-        for r in store.get_all_results():
-            if r["file_path"] in folder_paths:
-                write_meta(r["file_path"], r)
+        for r in store.get_results_for_folder(folder):
+            write_meta(r["file_path"], r)
 
     store.close()
     callbacks.on_complete(total, failed_count)
-    _current_state = None
     log.info("Pipeline complete: %d analyzed, %d failed", len(results), failed_count)
     return results

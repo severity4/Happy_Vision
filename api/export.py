@@ -13,9 +13,8 @@ export_bp = Blueprint("export", __name__, url_prefix="/api/export")
 
 @export_bp.route("/<fmt>")
 def export_report(fmt):
-    store = ResultStore()
-    results = store.get_all_results()
-    store.close()
+    with ResultStore() as store:
+        results = store.get_all_results()
 
     if not results:
         return {"error": "No results to export"}, 404
