@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, jsonify, request, send_file, send_from_directory  # noqa: E402
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory  # noqa: E402
 
 from api.analysis import analysis_bp
 from api.export import export_bp
@@ -14,8 +14,16 @@ from api.results import results_bp
 from api.settings import settings_bp
 from api.update import update_bp
 from api.watch import watch_bp, auto_start_watcher
+from modules.auth import SESSION_TOKEN, is_request_allowed  # noqa: E402
 
 app = Flask(__name__)
+
+
+@app.before_request
+def _check_auth():
+    if not is_request_allowed(request):
+        return jsonify({"error": "Forbidden"}), 403
+
 
 # Register blueprints
 app.register_blueprint(settings_bp)
@@ -101,7 +109,12 @@ def serve_frontend(path):
         file_path = DIST_DIR / path
         if file_path.is_file():
             return send_from_directory(DIST_DIR, path)
-        return send_from_directory(DIST_DIR, "index.html")
+        # Serve index.html with session token substitution
+        index = (DIST_DIR / "index.html").read_text()
+        return Response(
+            index.replace("__HV_TOKEN__", SESSION_TOKEN),
+            mimetype="text/html",
+        )
     return {"message": "Happy Vision API is running. Frontend not built yet."}, 200
 
 

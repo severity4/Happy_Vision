@@ -40,7 +40,8 @@ export const useWatchStore = defineStore('watch', () => {
       eventSource = null
     }
 
-    eventSource = new EventSource('/api/watch/events')
+    const token = window.__HV_TOKEN__ || ''
+    eventSource = new EventSource(`/api/watch/events?token=${encodeURIComponent(token)}`)
 
     eventSource.onopen = () => {
       sseConnected = true
