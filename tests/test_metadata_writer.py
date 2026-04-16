@@ -209,8 +209,10 @@ def test_exiftool_batch_thread_safe(monkeypatch):
             errors.append(e)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert errors == []
     # 3 threads × 10 writes = 30 -execute lines

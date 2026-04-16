@@ -157,7 +157,9 @@ def test_pipeline_cancel_stops_metadata_writes(tmp_path, monkeypatch):
 
     writes = []
     class FakeBatch:
-        def write(self, path, args): writes.append(path); return True
+        def write(self, path, args):
+            writes.append(path)
+            return True
         def close(self): pass
         def __enter__(self): return self
         def __exit__(self, *a): pass
@@ -197,10 +199,12 @@ def test_pipeline_metadata_failure_marks_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "ExiftoolBatch", FailingBatch)
 
     errors = []
-    class CB(pl.PipelineCallbacks):
-        def on_error(self, path, err): errors.append((path, err))
 
-    results = pl.run_pipeline(
+    class CB(pl.PipelineCallbacks):
+        def on_error(self, path, err):
+            errors.append((path, err))
+
+    pl.run_pipeline(
         folder=str(tmp_path),
         api_key="test",
         concurrency=1,

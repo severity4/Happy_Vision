@@ -156,8 +156,10 @@ def test_concurrent_writes_do_not_deadlock(tmp_path):
 
     t1 = threading.Thread(target=writer, args=("A",))
     t2 = threading.Thread(target=writer, args=("B",))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     assert errors == []
     results = store.get_all_results()
