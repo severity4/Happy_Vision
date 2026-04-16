@@ -2,8 +2,8 @@
   <div>
     <!-- Header -->
     <div class="mb-8">
-      <h2 class="text-xl font-semibold text-text-primary tracking-tight">Settings</h2>
-      <p class="text-sm text-text-secondary mt-1">Configure API keys and analysis options</p>
+      <h2 class="text-xl font-semibold text-text-primary tracking-tight">設定</h2>
+      <p class="text-sm text-text-secondary mt-1">設定 API 金鑰與分析選項</p>
     </div>
 
     <!-- Loading -->
@@ -23,16 +23,16 @@
           <div>
             <h3 class="text-sm font-semibold text-text-primary">Gemini API Key</h3>
             <p v-if="store.settings.gemini_api_key_set" class="text-xs text-success mt-0.5">
-              Active ({{ store.settings.gemini_api_key }})
+              已啟用 ({{ store.settings.gemini_api_key }})
             </p>
-            <p v-else class="text-xs text-text-tertiary mt-0.5">Required for analysis</p>
+            <p v-else class="text-xs text-text-tertiary mt-0.5">分析功能必須填寫</p>
           </div>
         </div>
         <div class="flex gap-2">
           <input
             v-model="apiKey"
             type="password"
-            placeholder="Enter your Gemini API key"
+            placeholder="輸入你的 Gemini API Key"
             class="flex-1 bg-surface-0 border border-border-default rounded-lg px-3.5 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-violet/40 focus:border-accent-violet/60 transition-all"
           />
           <button
@@ -40,7 +40,7 @@
             :disabled="!apiKey"
             class="bg-accent-violet hover:bg-accent-violet-dim disabled:opacity-30 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-all"
           >
-            Save
+            儲存
           </button>
         </div>
       </div>
@@ -53,7 +53,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
             </svg>
           </div>
-          <h3 class="text-sm font-semibold text-text-primary">Model</h3>
+          <h3 class="text-sm font-semibold text-text-primary">模型</h3>
         </div>
         <div class="grid grid-cols-2 gap-2">
           <button
@@ -64,7 +64,7 @@
               : 'border-border-default bg-surface-0 hover:border-border-strong'"
           >
             <p class="text-sm font-medium text-text-primary">Flash Lite</p>
-            <p class="text-xs text-text-tertiary mt-0.5">Faster, cheaper</p>
+            <p class="text-xs text-text-tertiary mt-0.5">較快、較便宜</p>
             <div v-if="model === 'lite'" class="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-accent-violet"></div>
           </button>
           <button
@@ -75,7 +75,7 @@
               : 'border-border-default bg-surface-0 hover:border-border-strong'"
           >
             <p class="text-sm font-medium text-text-primary">Flash 2.5</p>
-            <p class="text-xs text-text-tertiary mt-0.5">Better quality</p>
+            <p class="text-xs text-text-tertiary mt-0.5">品質較好</p>
             <div v-if="model === 'flash'" class="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-accent-violet"></div>
           </button>
         </div>
@@ -89,7 +89,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
             </svg>
           </div>
-          <h3 class="text-sm font-semibold text-text-primary">Concurrency</h3>
+          <h3 class="text-sm font-semibold text-text-primary">並行數量</h3>
         </div>
         <div class="flex items-center gap-3">
           <input
@@ -102,7 +102,7 @@
           />
           <span class="text-sm font-mono font-semibold text-text-primary w-8 text-right tabular-nums">{{ concurrency }}</span>
         </div>
-        <p class="text-xs text-text-tertiary mt-2">Parallel API requests (1-20)</p>
+        <p class="text-xs text-text-tertiary mt-2">並行 API 請求數（1-20）</p>
       </div>
 
       <!-- Skip existing -->
@@ -115,8 +115,8 @@
               </svg>
             </div>
             <div>
-              <p class="text-sm font-semibold text-text-primary">Skip processed</p>
-              <p class="text-xs text-text-tertiary mt-0.5">Skip photos that were already analyzed</p>
+              <p class="text-sm font-semibold text-text-primary">跳過已處理</p>
+              <p class="text-xs text-text-tertiary mt-0.5">跳過已分析過的照片</p>
             </div>
           </div>
           <!-- Toggle switch -->

@@ -2,8 +2,8 @@
   <div>
     <!-- Header -->
     <div class="mb-8">
-      <h2 class="text-xl font-semibold text-text-primary tracking-tight">Analysis Progress</h2>
-      <p class="text-sm text-text-secondary mt-1">Real-time photo analysis status</p>
+      <h2 class="text-xl font-semibold text-text-primary tracking-tight">分析進度</h2>
+      <p class="text-sm text-text-secondary mt-1">即時照片分析狀態</p>
     </div>
 
     <!-- Empty state -->
@@ -13,9 +13,9 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
         </svg>
       </div>
-      <p class="text-sm text-text-secondary mb-3">No analysis running</p>
+      <p class="text-sm text-text-secondary mb-3">目前沒有分析任務</p>
       <router-link to="/" class="text-sm font-medium text-accent-violet hover:text-accent-violet-dim transition-colors">
-        Start an analysis
+        開始分析
       </router-link>
     </div>
 
@@ -29,10 +29,10 @@
             <span class="text-2xl font-bold text-text-primary tabular-nums">
               {{ store.total ? Math.round(store.done / store.total * 100) : 0 }}%
             </span>
-            <span class="text-xs text-text-tertiary">complete</span>
+            <span class="text-xs text-text-tertiary">完成</span>
           </div>
           <span class="text-xs text-text-secondary tabular-nums">
-            {{ store.done }} / {{ store.total }} photos
+            {{ store.done }} / {{ store.total }} 張照片
           </span>
         </div>
 
@@ -53,13 +53,13 @@
 
         <!-- Current file -->
         <p v-if="store.currentFile" class="mt-3 text-xs text-text-tertiary font-mono truncate">
-          <span class="text-text-secondary">Processing:</span> {{ store.currentFile }}
+          <span class="text-text-secondary">目前：</span> {{ store.currentFile }}
         </p>
 
         <!-- Status indicator -->
         <div v-if="store.isPaused" class="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-warning bg-warning/10 px-2.5 py-1 rounded-md">
           <span class="w-1.5 h-1.5 rounded-full bg-warning"></span>
-          Paused
+          已暫停
         </div>
       </div>
 
@@ -73,7 +73,7 @@
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
           </svg>
-          Pause
+          暫停
         </button>
         <button
           v-if="store.isPaused"
@@ -83,7 +83,7 @@
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
           </svg>
-          Resume
+          繼續
         </button>
         <button
           v-if="store.isRunning"
@@ -93,14 +93,14 @@
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
-          Cancel
+          取消
         </button>
         <router-link
           v-if="!store.isRunning && store.done > 0"
           to="/results"
           class="inline-flex items-center gap-1.5 bg-accent-violet hover:bg-accent-violet-dim text-white px-3.5 py-2 rounded-lg text-xs font-medium transition-colors shadow-lg shadow-accent-violet/20"
         >
-          View Results
+          查看結果
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
           </svg>
@@ -116,7 +116,7 @@
           <svg class="w-3.5 h-3.5 transition-transform" :class="errorsExpanded ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
           </svg>
-          {{ store.errors.length }} error{{ store.errors.length > 1 ? 's' : '' }}
+          {{ store.errors.length }} 個錯誤
         </button>
         <ul v-if="errorsExpanded" class="mt-3 space-y-1 max-h-40 overflow-y-auto">
           <li v-for="err in store.errors" :key="err.file" class="text-xs text-text-tertiary font-mono truncate">

@@ -46,10 +46,10 @@ import { ref, onMounted } from 'vue'
 
 const version = ref('')
 const navLinks = [
-  { to: '/', name: 'import', label: 'Import' },
-  { to: '/progress', name: 'progress', label: 'Progress' },
-  { to: '/results', name: 'results', label: 'Results' },
-  { to: '/settings', name: 'settings', label: 'Settings' },
+  { to: '/', name: 'import', label: '匯入' },
+  { to: '/progress', name: 'progress', label: '進度' },
+  { to: '/results', name: 'results', label: '結果' },
+  { to: '/settings', name: 'settings', label: '設定' },
 ]
 
 onMounted(async () => {

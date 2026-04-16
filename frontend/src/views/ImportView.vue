@@ -2,8 +2,8 @@
   <div>
     <!-- Header -->
     <div class="mb-8">
-      <h2 class="text-xl font-semibold text-text-primary tracking-tight">Import Photos</h2>
-      <p class="text-sm text-text-secondary mt-1">Analyze event photos with Gemini AI to generate metadata</p>
+      <h2 class="text-xl font-semibold text-text-primary tracking-tight">匯入照片</h2>
+      <p class="text-sm text-text-secondary mt-1">使用 Gemini AI 分析活動照片，自動產生描述與標籤</p>
     </div>
 
     <!-- Folder Browser -->
@@ -14,7 +14,7 @@
           v-if="browserData.parent"
           @click="navigateTo(browserData.parent)"
           class="p-1.5 rounded-md hover:bg-surface-3 text-text-secondary hover:text-text-primary transition-colors"
-          title="Go up"
+          title="上一層"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -32,7 +32,7 @@
         <button
           @click="navigateTo(pathInput)"
           class="p-1.5 rounded-md hover:bg-surface-3 text-text-secondary hover:text-text-primary transition-colors"
-          title="Go to path"
+          title="前往路徑"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
@@ -42,8 +42,8 @@
 
       <!-- File list -->
       <div class="max-h-80 overflow-y-auto">
-        <div v-if="loading" class="px-4 py-8 text-center text-text-tertiary text-sm">Loading...</div>
-        <div v-else-if="browserData.items.length === 0" class="px-4 py-8 text-center text-text-tertiary text-sm">Empty folder</div>
+        <div v-if="loading" class="px-4 py-8 text-center text-text-tertiary text-sm">載入中...</div>
+        <div v-else-if="browserData.items.length === 0" class="px-4 py-8 text-center text-text-tertiary text-sm">空資料夾</div>
         <div v-else>
           <div
             v-for="item in browserData.items"
@@ -73,9 +73,9 @@
         <div class="text-xs text-text-secondary">
           <span v-if="browserData.photo_count > 0" class="flex items-center gap-1.5">
             <span class="w-2 h-2 rounded-full bg-green-500"></span>
-            {{ browserData.photo_count }} photo{{ browserData.photo_count !== 1 ? 's' : '' }} found
+            {{ browserData.photo_count }} 張照片
           </span>
-          <span v-else class="text-text-tertiary">No photos in this folder</span>
+          <span v-else class="text-text-tertiary">此資料夾沒有照片</span>
         </div>
         <button
           @click="startAnalysis"
@@ -85,7 +85,7 @@
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
           </svg>
-          Analyze {{ browserData.photo_count }} photos
+          開始分析 {{ browserData.photo_count }} 張照片
         </button>
       </div>
     </div>
@@ -94,12 +94,12 @@
     <div class="mt-4 flex items-center justify-center gap-4 text-xs text-text-tertiary">
       <span class="flex items-center gap-1.5">
         <span class="w-1.5 h-1.5 rounded-full bg-accent-violet"></span>
-        Model: {{ settingsStore.settings.model === 'flash' ? 'Flash 2.5' : 'Flash Lite' }}
+        模型：{{ settingsStore.settings.model === 'flash' ? 'Flash 2.5' : 'Flash Lite' }}
       </span>
       <span class="w-px h-3 bg-border-default"></span>
       <span class="flex items-center gap-1.5">
         <span class="w-1.5 h-1.5 rounded-full bg-accent-violet"></span>
-        Concurrency: {{ settingsStore.settings.concurrency || 5 }}
+        並行數量：{{ settingsStore.settings.concurrency || 5 }}
       </span>
     </div>
   </div>
