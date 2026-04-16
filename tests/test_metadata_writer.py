@@ -215,3 +215,73 @@ def test_exiftool_batch_thread_safe(monkeypatch):
     assert errors == []
     # 3 threads × 10 writes = 30 -execute lines
     assert fake.stdin.getvalue().count("-execute\n") == 30
+
+
+def test_exiftool_batch_survives_dead_process(monkeypatch):
+    """If subprocess died between calls, write() must return False, not raise."""
+    from modules import metadata_writer
+    import io
+
+    class DeadProc:
+        def __init__(self):
+            self.stdin = self
+            self.stdout = io.StringIO("")
+
+        def write(self, _data):
+            raise BrokenPipeError("exiftool died")
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            return ""
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(metadata_writer.subprocess, "Popen", lambda *a, **kw: DeadProc())
+
+    batch = metadata_writer.ExiftoolBatch()
+    ok = batch.write("/tmp/x.jpg", ["-IPTC:Headline=X"])
+    assert ok is False  # must not raise
+
+
+def test_exiftool_batch_does_not_false_positive_on_caption_with_error(monkeypatch):
+    """Tag values containing 'error' must not cause read_json to return {}."""
+    from modules import metadata_writer
+    import io
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout_chunks = [
+                '[{"SourceFile":"/tmp/x.jpg","Caption":"error handling demo"}]\n',
+                "{ready}\n",
+            ]
+            self._read_idx = 0
+            self.stdout = self
+
+        def readline(self):
+            if self._read_idx < len(self.stdout_chunks):
+                line = self.stdout_chunks[self._read_idx]
+                self._read_idx += 1
+                return line
+            return ""
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(metadata_writer.subprocess, "Popen", lambda *a, **kw: FakeProc())
+
+    batch = metadata_writer.ExiftoolBatch()
+    data = batch.read_json("/tmp/x.jpg")
+
+    # Old heuristic "'error' not in output.lower()" would make this return {}.
+    # New heuristic requires line-start "Error" which this output does not have.
+    assert data.get("Caption") == "error handling demo"

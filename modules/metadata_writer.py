@@ -119,6 +119,7 @@ class ExiftoolBatch:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._proc = None  # set below; keep assigned so close() is always safe
         self._proc = subprocess.Popen(
             [_get_exiftool_cmd(), "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE,
@@ -131,10 +132,13 @@ class ExiftoolBatch:
     def _run_batch(self, args: list[str]) -> tuple[bool, str]:
         """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
         with self._lock:
-            for arg in args:
-                self._proc.stdin.write(arg + "\n")
-            self._proc.stdin.write("-execute\n")
-            self._proc.stdin.flush()
+            try:
+                for arg in args:
+                    self._proc.stdin.write(arg + "\n")
+                self._proc.stdin.write("-execute\n")
+                self._proc.stdin.flush()
+            except (BrokenPipeError, ValueError, OSError) as e:
+                return False, f"exiftool process died: {e}"
 
             output_lines = []
             while True:
@@ -146,7 +150,10 @@ class ExiftoolBatch:
                 output_lines.append(line)
 
         output = "".join(output_lines)
-        ok = "Error" not in output and "error" not in output.lower()
+        # Only treat lines starting with "Error" as failures. A case-insensitive
+        # substring match would false-positive on tag values like a caption that
+        # contains "error" or filenames like "error_log.jpg".
+        ok = not any(line.lstrip().startswith("Error") for line in output.splitlines())
         return ok, output
 
     def write(self, photo_path: str, args: list[str]) -> bool:
