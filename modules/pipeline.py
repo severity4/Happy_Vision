@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 
 from modules.gemini_vision import analyze_photo
-from modules.metadata_writer import write_metadata as write_meta
+from modules.metadata_writer import ExiftoolBatch, build_exiftool_args
 from modules.result_store import ResultStore
 from modules.logger import setup_logger
 
@@ -107,6 +107,7 @@ def run_pipeline(
         to_process = photos
 
     total = len(to_process)
+    batch = ExiftoolBatch() if write_metadata else None
 
     def process_one(photo_path: str) -> dict | None:
         nonlocal done_count, failed_count
@@ -118,38 +119,46 @@ def run_pipeline(
 
         result = analyze_photo(photo_path, api_key=api_key, model=model)
 
+        # Write metadata before saving as 'completed' so that a successful
+        # save_result guarantees the photo has the IPTC marker on disk.
+        if result and batch is not None:
+            args = build_exiftool_args(result) + ["-overwrite_original"]
+            if args and not batch.write(photo_path, args):
+                result = None  # treat metadata failure as a full failure
+
         with lock:
             if result:
                 store.save_result(photo_path, result)
                 results.append(result)
             else:
-                store.mark_failed(photo_path, "Analysis returned no result")
+                if state.cancelled:
+                    return None  # user cancelled; don't mark failed
+                store.mark_failed(photo_path, "Analysis or metadata write failed")
                 failed_count += 1
-                callbacks.on_error(photo_path, "Analysis failed")
+                callbacks.on_error(photo_path, "Analysis or metadata failed")
 
             done_count += 1
             callbacks.on_progress(done_count, total, photo_path)
 
         return result
 
-    if concurrency <= 1:
-        for photo in to_process:
-            process_one(photo)
-            if state.cancelled:
-                break
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = {executor.submit(process_one, p): p for p in to_process}
-            for future in concurrent.futures.as_completed(futures):
+    try:
+        if concurrency <= 1:
+            for photo in to_process:
+                process_one(photo)
                 if state.cancelled:
-                    executor.shutdown(wait=False, cancel_futures=True)
                     break
-                future.result()
-
-    # Write metadata only for photos in this folder
-    if write_metadata and results:
-        for r in store.get_results_for_folder(folder):
-            write_meta(r["file_path"], r)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+                futures = {executor.submit(process_one, p): p for p in to_process}
+                for future in concurrent.futures.as_completed(futures):
+                    if state.cancelled:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    future.result()
+    finally:
+        if batch is not None:
+            batch.close()
 
     store.close()
     callbacks.on_complete(total, failed_count)

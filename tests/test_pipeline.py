@@ -93,3 +93,121 @@ def test_pipeline_skips_processed(tmp_path):
 
     assert len(analyze_calls) == 1
     assert "photo2.jpg" in analyze_calls[0]
+
+
+def test_pipeline_writes_metadata_per_photo(tmp_path, monkeypatch):
+    """When write_metadata=True, ExiftoolBatch.write is called once per photo."""
+    from modules import pipeline as pl
+
+    # 3 fake photos
+    for i in range(3):
+        (tmp_path / f"p{i}.jpg").write_bytes(b"\xff\xd8\xff\xd9")  # minimal JPEG
+
+    monkeypatch.setattr(
+        pl, "analyze_photo",
+        lambda path, **kw: {"title": f"T-{Path(path).name}", "keywords": ["k"],
+                            "description": "d", "category": "other",
+                            "scene_type": "indoor", "mood": "neutral", "people_count": 0},
+    )
+
+    writes = []
+
+    class FakeBatch:
+        def __init__(self): pass
+        def write(self, path, args):
+            writes.append(path)
+            return True
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    monkeypatch.setattr(pl, "ExiftoolBatch", FakeBatch)
+
+    pl.run_pipeline(
+        folder=str(tmp_path),
+        api_key="test",
+        concurrency=1,
+        write_metadata=True,
+        db_path=tmp_path / "r.db",
+    )
+
+    assert len(writes) == 3
+    assert all(str(tmp_path) in w for w in writes)
+
+
+def test_pipeline_cancel_stops_metadata_writes(tmp_path, monkeypatch):
+    """After cancel, no further metadata writes happen."""
+    from modules import pipeline as pl
+
+    for i in range(10):
+        (tmp_path / f"p{i}.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    state = pl.PipelineState()
+    call_count = {"n": 0}
+
+    def fake_analyze(path, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            state.cancel()
+        return {"title": "T", "keywords": [], "description": "",
+                "category": "other", "scene_type": "indoor",
+                "mood": "neutral", "people_count": 0}
+
+    monkeypatch.setattr(pl, "analyze_photo", fake_analyze)
+
+    writes = []
+    class FakeBatch:
+        def write(self, path, args): writes.append(path); return True
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    monkeypatch.setattr(pl, "ExiftoolBatch", FakeBatch)
+
+    pl.run_pipeline(
+        folder=str(tmp_path),
+        api_key="test",
+        concurrency=1,
+        write_metadata=True,
+        db_path=tmp_path / "r.db",
+        state=state,
+    )
+
+    # Cancelled after 2 analyses → at most 2 metadata writes (not all 10)
+    assert len(writes) <= 2
+
+
+def test_pipeline_metadata_failure_marks_failed(tmp_path, monkeypatch):
+    """If ExiftoolBatch.write returns False, photo should be marked failed."""
+    from modules import pipeline as pl
+
+    (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    monkeypatch.setattr(
+        pl, "analyze_photo",
+        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
+                            "category": "other", "scene_type": "indoor",
+                            "mood": "neutral", "people_count": 0},
+    )
+
+    class FailingBatch:
+        def write(self, path, args): return False
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    monkeypatch.setattr(pl, "ExiftoolBatch", FailingBatch)
+
+    errors = []
+    class CB(pl.PipelineCallbacks):
+        def on_error(self, path, err): errors.append((path, err))
+
+    results = pl.run_pipeline(
+        folder=str(tmp_path),
+        api_key="test",
+        concurrency=1,
+        write_metadata=True,
+        db_path=tmp_path / "r.db",
+        callbacks=CB(),
+    )
+
+    assert len(errors) == 1
+    assert "metadata" in errors[0][1].lower()
