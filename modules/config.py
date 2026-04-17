@@ -44,12 +44,15 @@ def load_config() -> dict:
         legacy_key = stored.pop("gemini_api_key", None)
         config.update(stored)
 
-    # Migration: if JSON had a plaintext key and Keychain is empty, move it
+    # Migration: if JSON had a plaintext key, ensure Keychain has it and
+    # scrub the JSON. If Keychain already has a (possibly different) key,
+    # it wins — we still must scrub to avoid the plaintext sticking around.
     keychain_key = secret_store.get_key()
-    if legacy_key and not keychain_key:
-        secret_store.set_key(legacy_key)
-        keychain_key = legacy_key
-        # Rewrite config.json without the key
+    if legacy_key:
+        if not keychain_key:
+            secret_store.set_key(legacy_key)
+            keychain_key = legacy_key
+        # Always rewrite JSON without the key when legacy_key was found
         _save_raw(config_path, config)
 
     config["gemini_api_key"] = keychain_key

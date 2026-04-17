@@ -120,3 +120,30 @@ def test_migrate_plaintext_key_from_json_to_keychain(monkeypatch, tmp_path):
     # JSON no longer has it
     raw = json.loads((tmp_path / "config.json").read_text())
     assert "gemini_api_key" not in raw
+
+
+def test_migration_scrubs_json_even_if_keychain_has_different_key(monkeypatch, tmp_path):
+    """If both JSON and Keychain have keys, Keychain wins AND JSON is still scrubbed."""
+    from modules import config, secret_store
+    import json
+
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({
+        "gemini_api_key": "legacy-key",
+        "model": "lite",
+    }))
+
+    # Keychain already has a different key
+    store = {"k": "keychain-key"}
+    monkeypatch.setattr(secret_store, "get_key", lambda: store["k"])
+    monkeypatch.setattr(secret_store, "set_key", lambda k: store.update({"k": k}))
+
+    cfg = config.load_config()
+
+    # Keychain key wins
+    assert cfg["gemini_api_key"] == "keychain-key"
+    # Keychain NOT overwritten by legacy
+    assert store["k"] == "keychain-key"
+    # JSON still scrubbed
+    raw = json.loads((tmp_path / "config.json").read_text())
+    assert "gemini_api_key" not in raw

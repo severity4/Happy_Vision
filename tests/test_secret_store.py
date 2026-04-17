@@ -1,5 +1,6 @@
 """tests/test_secret_store.py"""
 from modules import secret_store
+import keyring
 
 
 class FakeKeyring:
@@ -15,6 +16,15 @@ class FakeKeyring:
 
     def delete_password(self, service, username):
         self._store.pop((service, username), None)
+
+
+class RaisingFakeKeyring(FakeKeyring):
+    """Like FakeKeyring but raises PasswordDeleteError when deleting absent keys,
+    matching real keyring contract."""
+    def delete_password(self, service, username):
+        if (service, username) not in self._store:
+            raise keyring.errors.PasswordDeleteError("not found")
+        del self._store[(service, username)]
 
 
 def test_set_and_get_key(monkeypatch):
@@ -51,4 +61,26 @@ def test_set_empty_string_clears(monkeypatch):
     monkeypatch.setattr(secret_store, "_keyring", fake)
     secret_store.set_key("abc")
     secret_store.set_key("")
+    assert secret_store.get_key() == ""
+
+
+def test_clear_key_swallows_password_delete_error(monkeypatch):
+    """Real keyring raises PasswordDeleteError when clearing an absent key."""
+    fake = RaisingFakeKeyring()
+    monkeypatch.setattr(secret_store, "_keyring", fake)
+    # Must not raise
+    secret_store.clear_key()
+    assert secret_store.get_key() == ""
+
+
+def test_get_key_returns_empty_on_keyring_error(monkeypatch):
+    """Locked Keychain / access denied must return empty string, not crash."""
+    class FailingKeyring:
+        def get_password(self, s, u):
+            raise keyring.errors.KeyringError("locked")
+        def set_password(self, s, u, p):
+            pass
+        def delete_password(self, s, u):
+            pass
+    monkeypatch.setattr(secret_store, "_keyring", FailingKeyring())
     assert secret_store.get_key() == ""
