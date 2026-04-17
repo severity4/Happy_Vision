@@ -16,6 +16,40 @@ from api.update import update_bp
 from api.watch import watch_bp, auto_start_watcher
 from modules.auth import SESSION_TOKEN, is_request_allowed  # noqa: E402
 
+_allowed_roots: set[Path] = set()
+
+
+def register_allowed_root(folder) -> None:
+    """Mark a folder as legitimately browseable/servable. Called whenever the
+    user explicitly opens a folder for watching or analysis."""
+    p = Path(folder).expanduser().resolve()
+    if p.is_dir():
+        _allowed_roots.add(p)
+
+
+def _path_is_allowed(path: Path) -> bool:
+    """Check if a resolved path is inside the user's home OR an allowed root."""
+    try:
+        resolved = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+    home = Path.home().resolve()
+    try:
+        resolved.relative_to(home)
+        return True
+    except ValueError:
+        pass
+
+    for root in _allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 app = Flask(__name__)
 
 
@@ -32,6 +66,12 @@ app.register_blueprint(results_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(watch_bp)
 app.register_blueprint(update_bp)
+
+# Register allowed roots before starting watcher
+from modules.config import load_config  # noqa: E402
+_cfg = load_config()
+if _cfg.get("watch_folder"):
+    register_allowed_root(_cfg["watch_folder"])
 
 # Auto-start watch folder if previously enabled.
 # In dev (debug=True) Werkzeug's reloader forks: parent has no WERKZEUG_RUN_MAIN;
@@ -60,6 +100,8 @@ def browse_folder():
     p = Path(folder)
     if not p.is_dir():
         return jsonify({"error": "Not a directory"}), 400
+    if not _path_is_allowed(p):
+        return jsonify({"error": "Forbidden"}), 403
 
     items = []
     try:
@@ -86,9 +128,16 @@ def browse_folder():
 def serve_photo():
     """Serve a photo file by path (for thumbnail display in frontend)."""
     photo_path = request.args.get("path", "")
-    if not photo_path or not Path(photo_path).is_file():
-        return {"error": "File not found"}, 404
-    return send_file(photo_path, mimetype="image/jpeg")
+    if not photo_path:
+        return jsonify({"error": "File not found"}), 404
+    p = Path(photo_path)
+    if p.suffix.lower() not in {".jpg", ".jpeg"}:
+        return jsonify({"error": "Forbidden"}), 403
+    if not p.is_file():
+        return jsonify({"error": "File not found"}), 404
+    if not _path_is_allowed(p):
+        return jsonify({"error": "Forbidden"}), 403
+    return send_file(str(p), mimetype="image/jpeg")
 
 
 # Serve Vue frontend in production

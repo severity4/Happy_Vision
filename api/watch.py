@@ -71,6 +71,8 @@ def auto_start_watcher():
     config = load_config()
     if config.get("watch_enabled") and config.get("watch_folder"):
         try:
+            from web_ui import register_allowed_root  # lazy to avoid circular
+            register_allowed_root(config["watch_folder"])
             watcher = get_watcher()
             watcher.start(folder=config["watch_folder"])
             log.info("Auto-started watcher for: %s", config["watch_folder"])
@@ -100,6 +102,9 @@ def start_watch():
     config["watch_folder"] = folder
     config["watch_enabled"] = True
     save_config(config)
+
+    from web_ui import register_allowed_root  # lazy to avoid circular
+    register_allowed_root(folder)
 
     try:
         watcher.start(folder=folder)
@@ -225,12 +230,16 @@ def enqueue_folder():
     if not config.get("gemini_api_key"):
         return jsonify({"error": "Gemini API key not configured"}), 400
 
+    from web_ui import register_allowed_root  # lazy to avoid circular
+    register_allowed_root(folder)
+
     watcher = get_watcher()
 
     # Auto-start watcher if stopped — use configured watch_folder,
     # falling back to the enqueued folder itself.
     if watcher.state == "stopped":
         start_folder = config.get("watch_folder") or folder
+        register_allowed_root(start_folder)
         try:
             watcher.start(folder=start_folder)
         except ValueError as e:
