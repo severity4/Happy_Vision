@@ -66,3 +66,16 @@ def test_export_json_returns_attachment(client, monkeypatch, tmp_path):
     import json as _json
     data = _json.loads(r.data)
     assert any(item.get("title") == "JsonTitle" for item in data)
+
+
+def test_export_diagnostics_returns_zip(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+
+    from modules.event_store import EventStore
+    with EventStore() as store:
+        store.add_event("watch_started", folder="/photos", details={"x": 1})
+
+    r = client.get("/api/export/diagnostics")
+    assert r.status_code == 200
+    assert "happy_vision_diagnostics.zip" in r.headers.get("Content-Disposition", "")
+    assert r.mimetype == "application/zip"

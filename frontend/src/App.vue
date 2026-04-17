@@ -125,6 +125,7 @@ const update = reactive({
 })
 
 let pollTimer = null
+let autoApplyAttempted = false
 
 async function checkForUpdate() {
   try {
@@ -184,6 +185,23 @@ async function restartApp() {
   } catch {}
 }
 
+async function applyPendingUpdateOnLaunch() {
+  if (autoApplyAttempted) return
+  autoApplyAttempted = true
+
+  try {
+    const res = await fetch('/api/update/status')
+    const data = await res.json()
+    update.status = data.status
+    update.progress = data.progress || 0
+    update.latestVersion = data.latest_version || ''
+
+    if (data.status === 'ready') {
+      await restartApp()
+    }
+  } catch {}
+}
+
 function dismissUpdate() {
   update.show = false
   stopPolling()
@@ -212,6 +230,9 @@ onMounted(async () => {
 
   // Refresh store state when window comes back from background
   document.addEventListener('visibilitychange', handleVisibilityChange)
+
+  // If an update was downloaded in the previous session, apply it now.
+  setTimeout(applyPendingUpdateOnLaunch, 1000)
 
   // Check for updates after a short delay (don't block startup)
   setTimeout(checkForUpdate, 2000)

@@ -2,8 +2,10 @@
 
 import concurrent.futures
 import threading
+import time
 from pathlib import Path
 
+from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args
 from modules.result_store import ResultStore
@@ -108,6 +110,18 @@ def run_pipeline(
 
     total = len(to_process)
     batch = ExiftoolBatch() if write_metadata else None
+    events = EventStore()
+    events.add_event(
+        "analysis_run_started",
+        folder=folder,
+        details={
+            "total": total,
+            "model": model,
+            "concurrency": concurrency,
+            "skip_existing": skip_existing,
+            "write_metadata": write_metadata,
+        },
+    )
 
     def process_one(photo_path: str) -> dict | None:
         nonlocal done_count, failed_count
@@ -117,25 +131,50 @@ def run_pipeline(
         if state.cancelled:
             return None
 
+        analysis_started = time.perf_counter()
         result = analyze_photo(photo_path, api_key=api_key, model=model)
+        analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
 
         # Write metadata before saving as 'completed' so that a successful
         # save_result guarantees the photo has the IPTC marker on disk.
+        metadata_ms = None
         if result and batch is not None:
+            metadata_started = time.perf_counter()
             args = build_exiftool_args(result) + ["-overwrite_original"]
             if not batch.write(photo_path, args):
                 result = None  # treat metadata failure as a full failure
+            metadata_ms = round((time.perf_counter() - metadata_started) * 1000)
 
         with lock:
             if result:
                 store.save_result(photo_path, result)
                 results.append(result)
+                events.add_event(
+                    "analysis_photo_completed",
+                    folder=folder,
+                    file_path=photo_path,
+                    details={
+                        "analyze_ms": analyze_ms,
+                        "metadata_write_ms": metadata_ms,
+                        "write_metadata": batch is not None,
+                    },
+                )
             else:
                 if state.cancelled:
                     return None  # user cancelled; don't mark failed
                 store.mark_failed(photo_path, "Analysis or metadata write failed")
                 failed_count += 1
                 callbacks.on_error(photo_path, "Analysis or metadata failed")
+                events.add_event(
+                    "analysis_photo_failed",
+                    folder=folder,
+                    file_path=photo_path,
+                    details={
+                        "analyze_ms": analyze_ms,
+                        "metadata_write_ms": metadata_ms,
+                        "error_stage": "metadata_write" if batch is not None else "analysis",
+                    },
+                )
 
             done_count += 1
             callbacks.on_progress(done_count, total, photo_path)
@@ -159,6 +198,17 @@ def run_pipeline(
     finally:
         if batch is not None:
             batch.close()
+        events.add_event(
+            "analysis_run_finished",
+            folder=folder,
+            details={
+                "total": total,
+                "completed": len(results),
+                "failed": failed_count,
+                "cancelled": state.cancelled,
+            },
+        )
+        events.close()
 
     store.close()
     callbacks.on_complete(total, failed_count)

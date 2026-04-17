@@ -26,6 +26,28 @@ def test_build_trampoline_script_substitutes_paths(tmp_path):
     assert 'rm -f "$0"' in script
 
 
+def test_has_pending_update_true_when_pending_app_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+    pending_app = tmp_path / "pending_update" / "HappyVision.app"
+    pending_app.mkdir(parents=True)
+
+    assert updater.has_pending_update() is True
+
+
+def test_get_state_reports_ready_when_pending_update_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+    pending_app = tmp_path / "pending_update" / "HappyVision.app"
+    pending_app.mkdir(parents=True)
+
+    with updater._lock:
+        updater._update_state["status"] = "idle"
+        updater._update_state["progress"] = 0
+
+    state = updater.get_state()
+    assert state["status"] == "ready"
+    assert state["progress"] == 100
+
+
 def test_build_trampoline_script_quotes_paths_with_spaces():
     """Paths containing spaces must be shell-quoted."""
     script = updater._build_trampoline_script(

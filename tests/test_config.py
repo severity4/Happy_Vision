@@ -19,6 +19,9 @@ def _mock_secret_store(monkeypatch, initial=""):
 def test_default_config_has_required_keys():
     # gemini_api_key intentionally NOT in DEFAULT_CONFIG — it lives in Keychain
     assert "gemini_api_key" not in DEFAULT_CONFIG
+    assert "tester_name" in DEFAULT_CONFIG
+    assert "machine_name" in DEFAULT_CONFIG
+    assert "app_version" in DEFAULT_CONFIG
     assert "model" in DEFAULT_CONFIG
     assert "concurrency" in DEFAULT_CONFIG
     assert DEFAULT_CONFIG["model"] == "lite"

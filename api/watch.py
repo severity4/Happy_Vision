@@ -7,6 +7,7 @@ import threading
 from flask import Blueprint, request, jsonify, Response
 
 from modules.config import load_config, save_config
+from modules.event_store import EventStore
 from modules.folder_watcher import FolderWatcher, WatcherCallbacks
 from modules.logger import setup_logger
 from modules.result_store import ResultStore
@@ -110,6 +111,8 @@ def start_watch():
         watcher.start(folder=folder)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    with EventStore() as events:
+        events.add_event("watch_api_start", folder=folder)
 
     return jsonify({"status": "watching", "folder": folder})
 
@@ -120,6 +123,8 @@ def pause_watch():
     if watcher.state != "watching":
         return jsonify({"error": "Not currently watching"}), 409
     watcher.pause()
+    with EventStore() as events:
+        events.add_event("watch_api_pause", folder=watcher.folder)
     return jsonify({"status": "paused"})
 
 
@@ -129,17 +134,22 @@ def resume_watch():
     if watcher.state != "paused":
         return jsonify({"error": "Not currently paused"}), 409
     watcher.start()
+    with EventStore() as events:
+        events.add_event("watch_api_resume", folder=watcher.folder)
     return jsonify({"status": "watching"})
 
 
 @watch_bp.route("/stop", methods=["POST"])
 def stop_watch():
     watcher = get_watcher()
+    folder = watcher.folder
     watcher.stop()
 
     config = load_config()
     config["watch_enabled"] = False
     save_config(config)
+    with EventStore() as events:
+        events.add_event("watch_api_stop", folder=folder)
 
     return jsonify({"status": "stopped"})
 
@@ -249,5 +259,11 @@ def enqueue_folder():
         enqueued, skipped = watcher.enqueue_folder(folder)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    with EventStore() as events:
+        events.add_event(
+            "watch_api_enqueue",
+            folder=folder,
+            details={"enqueued": enqueued, "skipped": skipped},
+        )
 
     return jsonify({"enqueued": enqueued, "skipped": skipped})

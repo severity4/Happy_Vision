@@ -182,6 +182,27 @@ def test_dedup_enqueues_new_photo(tmp_path):
     store.close()
 
 
+def test_dedup_skips_photo_already_in_queue(tmp_path):
+    """A photo already queued must not be enqueued again on the next scan."""
+    photo = tmp_path / "queued.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+    store = ResultStore(tmp_path / "test.db")
+    watcher = FolderWatcher()
+    watcher._folder = str(tmp_path)
+    watcher._store = store
+    watcher._inflight_paths.add(str(photo))
+
+    with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
+        with patch("modules.folder_watcher.file_size_stable", return_value=True):
+            enqueued, skipped = watcher._scan_folder_into_queue(str(tmp_path))
+
+    assert enqueued == 0
+    assert skipped == 1
+    assert watcher.queue_size == 0
+    store.close()
+
+
 def test_failed_photos_are_skipped(tmp_path):
     """Photos marked as failed in DB should NOT be re-enqueued."""
     photo = tmp_path / "failed.jpg"
@@ -486,3 +507,32 @@ def test_scan_skips_failed_photos(tmp_path, monkeypatch):
 
     assert enqueued == 1  # only p2
     assert skipped == 1  # p1 skipped because failed
+
+
+def test_process_one_clears_inflight_path_after_completion(tmp_path, monkeypatch):
+    """After a queued photo finishes, it should be eligible for future scans."""
+    from modules import folder_watcher as fw
+
+    photo = tmp_path / "p.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xd9")
+
+    monkeypatch.setattr(
+        fw, "analyze_photo",
+        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
+                            "category": "other", "scene_type": "indoor",
+                            "mood": "neutral", "people_count": 0},
+    )
+    monkeypatch.setattr(fw, "load_config",
+                        lambda: {"gemini_api_key": "k", "watch_concurrency": 1,
+                                 "watch_interval": 1, "model": "lite"})
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher._folder = str(tmp_path)
+    watcher._store = ResultStore(tmp_path / "test.db")
+    watcher._batch = type("B", (), {"write": lambda self, p, a: True})()
+    watcher._inflight_paths.add(str(photo))
+
+    watcher._process_one(str(photo))
+
+    assert str(photo) not in watcher._inflight_paths
+    watcher._store.close()

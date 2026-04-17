@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from modules.config import load_config, save_config
+from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
 from modules.logger import setup_logger
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args, has_happy_vision_tag
@@ -87,7 +88,9 @@ class FolderWatcher:
         self._lock = threading.Lock()
         self._scan_lock = threading.Lock()  # Prevent concurrent scans
         self._processing_count = 0
+        self._inflight_paths: set[str] = set()
         self._store: ResultStore | None = None
+        self._events: EventStore | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._batch: "ExiftoolBatch | None" = None
 
@@ -137,6 +140,7 @@ class FolderWatcher:
         self._stop_event.clear()
         self._pause_event.set()
         self._store = ResultStore()
+        self._events = EventStore()
         self._executor = ThreadPoolExecutor(max_workers=self._concurrency)
         self._batch = ExiftoolBatch()
 
@@ -147,6 +151,15 @@ class FolderWatcher:
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._poll_thread.start()
         self._worker_thread.start()
+        if self._events is not None:
+            self._events.add_event(
+                "watch_started",
+                folder=self._folder,
+                details={
+                    "concurrency": self._concurrency,
+                    "interval": self._interval,
+                },
+            )
 
         log.info("Watcher started: %s (concurrency=%d, interval=%ds)",
                  self._folder, self._concurrency, self._interval)
@@ -158,6 +171,8 @@ class FolderWatcher:
         self._pause_event.clear()
         self._state = "paused"
         self._callbacks.on_state_change("paused")
+        if self._events is not None:
+            self._events.add_event("watch_paused", folder=self._folder)
         log.info("Watcher paused")
 
     def stop(self) -> None:
@@ -171,7 +186,9 @@ class FolderWatcher:
         # Clear the queue so new items don't get picked up
         while not self._queue.empty():
             try:
-                self._queue.get_nowait()
+                photo_path = self._queue.get_nowait()
+                with self._lock:
+                    self._inflight_paths.discard(photo_path)
             except queue.Empty:
                 break
 
@@ -199,6 +216,10 @@ class FolderWatcher:
         if self._store:
             self._store.close()
             self._store = None
+        if self._events:
+            self._events.add_event("watch_stopped", folder=self._folder)
+            self._events.close()
+            self._events = None
 
         log.info("Watcher stopped")
 
@@ -250,7 +271,14 @@ class FolderWatcher:
             raise ValueError(f"Folder not accessible: {folder}")
         if self._store is None:
             self._store = ResultStore()
-        return self._scan_folder_into_queue(folder)
+        enqueued, skipped = self._scan_folder_into_queue(folder)
+        if self._events is not None:
+            self._events.add_event(
+                "watch_enqueue_folder",
+                folder=folder,
+                details={"enqueued": enqueued, "skipped": skipped},
+            )
+        return enqueued, skipped
 
     def _scan_folder_into_queue(self, folder: str) -> tuple[int, int]:
         """Scan the given folder and enqueue unprocessed photos. Returns (enqueued, skipped)."""
@@ -269,6 +297,13 @@ class FolderWatcher:
                 if status in ("completed", "failed"):
                     skipped += 1
                     continue
+
+                # The file may already be queued or currently being processed.
+                # Keep it out of the queue until that attempt has settled.
+                with self._lock:
+                    if photo_path in self._inflight_paths:
+                        skipped += 1
+                        continue
 
                 # For unknown or failed files, check IPTC (cross-machine dedup)
                 if status is None:
@@ -289,6 +324,8 @@ class FolderWatcher:
                     skipped += 1
                     continue
 
+                with self._lock:
+                    self._inflight_paths.add(photo_path)
                 self._queue.put(photo_path)
                 enqueued += 1
 
@@ -328,32 +365,71 @@ class FolderWatcher:
             api_key = config.get("gemini_api_key", "")
             model = config.get("model", "lite")
 
+            analysis_started = time.perf_counter()
             result = analyze_photo(photo_path, api_key=api_key, model=model)
+            analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
 
             if not result:
                 if self._store:
                     self._store.mark_failed(photo_path, "Analysis returned no result")
+                if self._events is not None:
+                    self._events.add_event(
+                        "watch_photo_failed",
+                        folder=self._folder,
+                        file_path=photo_path,
+                        details={"error_stage": "analysis", "analyze_ms": analyze_ms},
+                    )
                 self._callbacks.on_error(photo_path, "Analysis returned no result")
                 return
 
             # Write metadata first; only mark completed if IPTC actually lands
             if self._batch is not None:
+                metadata_started = time.perf_counter()
                 args = build_exiftool_args(result) + ["-overwrite_original"]
                 if not self._batch.write(photo_path, args):
                     if self._store:
                         self._store.mark_failed(photo_path, "Metadata write failed")
+                    if self._events is not None:
+                        self._events.add_event(
+                            "watch_photo_failed",
+                            folder=self._folder,
+                            file_path=photo_path,
+                            details={
+                                "error_stage": "metadata_write",
+                                "analyze_ms": analyze_ms,
+                                "metadata_write_ms": round((time.perf_counter() - metadata_started) * 1000),
+                            },
+                        )
                     self._callbacks.on_error(photo_path, "Metadata write failed")
                     return
+                metadata_ms = round((time.perf_counter() - metadata_started) * 1000)
+            else:
+                metadata_ms = None
 
             if self._store:
                 self._store.save_result(photo_path, result)
+            if self._events is not None:
+                self._events.add_event(
+                    "watch_photo_completed",
+                    folder=self._folder,
+                    file_path=photo_path,
+                    details={"analyze_ms": analyze_ms, "metadata_write_ms": metadata_ms},
+                )
             log.info("Processed: %s", photo_path)
             self._callbacks.on_processed(photo_path, self._queue.qsize())
         except Exception as e:
             log.exception("Failed to process %s", photo_path)
             if self._store:
                 self._store.mark_failed(photo_path, str(e))
+            if self._events is not None:
+                self._events.add_event(
+                    "watch_photo_failed",
+                    folder=self._folder,
+                    file_path=photo_path,
+                    details={"error_stage": "exception", "error_message": str(e)},
+                )
             self._callbacks.on_error(photo_path, str(e))
         finally:
             with self._lock:
                 self._processing_count -= 1
+                self._inflight_paths.discard(photo_path)

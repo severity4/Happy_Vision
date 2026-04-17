@@ -62,7 +62,19 @@ def _is_newer(remote: str, local: str) -> bool:
 
 def get_state() -> dict:
     with _lock:
-        return dict(_update_state)
+        state = dict(_update_state)
+    if state["status"] in {"idle", "available", "error"} and has_pending_update():
+        state["status"] = "ready"
+        state["progress"] = 100
+    return state
+
+
+def has_pending_update() -> bool:
+    """Return True if a previously downloaded .app is waiting to be applied."""
+    pending_dir = get_config_dir() / "pending_update"
+    if not pending_dir.exists():
+        return False
+    return any(pending_dir.rglob("*.app"))
 
 
 def check_for_update() -> dict:

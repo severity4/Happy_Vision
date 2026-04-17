@@ -22,6 +22,9 @@ def update_settings():
     data = request.get_json()
     config = load_config()
     for key in [
+        "tester_name",
+        "machine_name",
+        "app_version",
         "model",
         "concurrency",
         "write_metadata",

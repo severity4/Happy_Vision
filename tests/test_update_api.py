@@ -38,3 +38,14 @@ def test_download_rejected_if_already_downloading(client):
 
     assert r1.status_code == 200
     assert r2.status_code == 409
+
+
+def test_status_returns_ready_when_pending_update_exists(client):
+    with patch("api.update.get_state", return_value={"status": "ready", "progress": 100}):
+        with patch("api.update.get_current_version", return_value="1.0.0"):
+            r = client.get("/api/update/status")
+
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["status"] == "ready"
+    assert data["current_version"] == "1.0.0"

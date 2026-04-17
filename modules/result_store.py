@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import threading
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -13,11 +14,30 @@ class ResultStore:
     def __init__(self, db_path: Path | str | None = None):
         if db_path is None:
             db_path = get_config_dir() / "results.db"
-        self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
-        self._init_db()
+        self.db_path = self._resolve_db_path(Path(db_path))
+        try:
+            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self._init_db()
+        except sqlite3.Error:
+            fallback_dir = Path(tempfile.gettempdir()) / "happy-vision"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            self.db_path = fallback_dir / Path(db_path).name
+            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self._init_db()
+
+    def _resolve_db_path(self, path: Path) -> Path:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            test_conn = sqlite3.connect(str(path))
+            test_conn.close()
+            return path
+        except sqlite3.Error:
+            fallback_dir = Path(tempfile.gettempdir()) / "happy-vision"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return fallback_dir / path.name
 
     def _init_db(self):
         self.conn.execute("PRAGMA journal_mode = WAL")

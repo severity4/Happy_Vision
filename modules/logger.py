@@ -1,6 +1,7 @@
 """modules/logger.py — Logging setup for Happy Vision"""
 
 import logging
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -22,10 +23,17 @@ def setup_logger(name: str = "happy_vision") -> logging.Logger:
     logger.addHandler(console)
 
     # File handler
-    log_dir = get_config_dir() / "logs"
-    log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / f"{datetime.now():%Y-%m-%d}.log"
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    try:
+        log_dir = get_config_dir() / "logs"
+        log_dir.mkdir(exist_ok=True)
+        log_file = log_dir / f"{datetime.now():%Y-%m-%d}.log"
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    except OSError:
+        fallback_dir = Path(tempfile.gettempdir()) / "happy-vision-logs"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        log_file = fallback_dir / f"{datetime.now():%Y-%m-%d}.log"
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")

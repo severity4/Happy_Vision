@@ -7,11 +7,15 @@ populated from Keychain for backward compatibility with callers.
 
 import json
 import os
+import platform
 from pathlib import Path
 
 from modules import secret_store
 
 DEFAULT_CONFIG = {
+    "tester_name": "",
+    "machine_name": platform.node(),
+    "app_version": "dev",
     "model": "lite",
     "concurrency": 5,
     "write_metadata": False,

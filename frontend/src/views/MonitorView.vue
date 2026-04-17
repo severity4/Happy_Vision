@@ -156,6 +156,12 @@
         >
           匯出 JSON
         </a>
+        <a
+          href="/api/export/diagnostics"
+          class="inline-flex items-center gap-1.5 bg-surface-3 hover:bg-surface-4 text-text-primary px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors"
+        >
+          匯出診斷
+        </a>
       </div>
 
       <!-- Inline folder browser -->

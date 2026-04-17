@@ -7,6 +7,7 @@ import threading
 from flask import Blueprint, request, jsonify, Response
 
 from modules.config import load_config
+from modules.event_store import EventStore
 from modules.pipeline import run_pipeline, PipelineCallbacks, PipelineState
 from modules.logger import setup_logger
 
@@ -64,6 +65,17 @@ def start_analysis():
     concurrency = data.get("concurrency", config.get("concurrency", 5))
     skip_existing = data.get("skip_existing", config.get("skip_existing", False))
     write_metadata = data.get("write_metadata", config.get("write_metadata", False))
+    with EventStore() as events:
+        events.add_event(
+            "analysis_api_start",
+            folder=folder,
+            details={
+                "model": model,
+                "concurrency": concurrency,
+                "skip_existing": skip_existing,
+                "write_metadata": write_metadata,
+            },
+        )
 
     # Create state before starting thread so pause/cancel work immediately
     _pipeline_state = PipelineState()
@@ -92,6 +104,8 @@ def start_analysis():
 def pause_analysis():
     if _pipeline_state:
         _pipeline_state.pause()
+        with EventStore() as events:
+            events.add_event("analysis_api_pause")
         return jsonify({"status": "paused"})
     return jsonify({"error": "No analysis running"}), 404
 
@@ -100,6 +114,8 @@ def pause_analysis():
 def resume_analysis():
     if _pipeline_state:
         _pipeline_state.resume()
+        with EventStore() as events:
+            events.add_event("analysis_api_resume")
         return jsonify({"status": "resumed"})
     return jsonify({"error": "No analysis running"}), 404
 
@@ -108,6 +124,8 @@ def resume_analysis():
 def cancel_analysis():
     if _pipeline_state:
         _pipeline_state.cancel()
+        with EventStore() as events:
+            events.add_event("analysis_api_cancel")
         return jsonify({"status": "cancelled"})
     return jsonify({"error": "No analysis running"}), 404
 
@@ -120,11 +138,13 @@ def sse_stream():
 
     def generate():
         try:
+            yield ": keepalive\n\n"
             while True:
-                msg = q.get(timeout=30)
-                yield msg
-        except queue.Empty:
-            yield "event: ping\ndata: {}\n\n"
+                try:
+                    msg = q.get(timeout=30)
+                    yield msg
+                except queue.Empty:
+                    yield "event: ping\ndata: {}\n\n"
         finally:
             with _sse_lock:
                 if q in _sse_queues:

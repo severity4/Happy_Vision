@@ -45,6 +45,41 @@
         </div>
       </div>
 
+      <!-- Tester identity -->
+      <div class="rounded-xl border border-border-default bg-surface-1 p-5">
+        <div class="flex items-center gap-2 mb-4">
+          <div class="w-8 h-8 rounded-lg bg-accent-violet/10 flex items-center justify-center">
+            <svg class="w-4 h-4 text-accent-violet" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9 9 0 10-6 0M12 12a3 3 0 110-6 3 3 0 010 6z" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-text-primary">測試者資訊</h3>
+            <p class="text-xs text-text-tertiary mt-0.5">用來辨識是哪位同事、哪台機器回報的狀況</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-3">
+          <input
+            v-model="testerName"
+            type="text"
+            placeholder="測試者名稱"
+            class="bg-surface-0 border border-border-default rounded-lg px-3.5 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-violet/40 focus:border-accent-violet/60 transition-all"
+          />
+          <input
+            v-model="machineName"
+            type="text"
+            placeholder="機器名稱"
+            class="bg-surface-0 border border-border-default rounded-lg px-3.5 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-violet/40 focus:border-accent-violet/60 transition-all"
+          />
+          <button
+            @click="saveTesterInfo"
+            class="bg-surface-3 hover:bg-surface-4 text-text-primary px-4 py-2.5 rounded-lg text-sm font-medium transition-all"
+          >
+            儲存測試資訊
+          </button>
+        </div>
+      </div>
+
       <!-- Watch Folder -->
       <div class="rounded-xl border border-border-default bg-surface-1 overflow-hidden">
         <div class="flex items-center gap-2 p-5 pb-0">
@@ -214,6 +249,8 @@ const store = useSettingsStore()
 const watchStore = useWatchStore()
 
 const apiKey = ref('')
+const testerName = ref('')
+const machineName = ref('')
 const model = ref('lite')
 const concurrency = ref(1)
 const skipExisting = ref(false)
@@ -238,6 +275,8 @@ const concurrencyDescription = computed(() => {
 onMounted(async () => {
   await store.fetchSettings()
   model.value = store.settings.model || 'lite'
+  testerName.value = store.settings.tester_name || ''
+  machineName.value = store.settings.machine_name || ''
   // Unified concurrency: prefer watch_concurrency (used by watcher), fall back to concurrency
   concurrency.value = Math.min(10, Math.max(1, store.settings.watch_concurrency || store.settings.concurrency || 1))
   skipExisting.value = store.settings.skip_existing || false
@@ -253,6 +292,13 @@ async function saveApiKey() {
 
 async function save(updates) {
   await store.updateSettings(updates)
+}
+
+async function saveTesterInfo() {
+  await save({
+    tester_name: testerName.value,
+    machine_name: machineName.value,
+  })
 }
 
 async function saveConcurrency() {
