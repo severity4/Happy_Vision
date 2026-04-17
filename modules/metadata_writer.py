@@ -1,7 +1,9 @@
 """modules/metadata_writer.py — IPTC/XMP metadata read/write via exiftool"""
 
+import io
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -10,6 +12,11 @@ from pathlib import Path
 from modules.logger import setup_logger
 
 log = setup_logger("metadata_writer")
+
+# Max seconds to wait for one line from exiftool before killing the process.
+# Picked to be longer than any reasonable tag write on a large JPEG but short
+# enough that a genuinely hung exiftool doesn't freeze the worker pool.
+EXIFTOOL_READ_TIMEOUT_SEC = 30.0
 
 
 def _get_exiftool_cmd() -> str:
@@ -131,6 +138,20 @@ class ExiftoolBatch:
 
     _UNSAFE_CHARS = ("\n", "\r", "\x00")
 
+    def _readline_with_timeout(self, timeout: float) -> str | None:
+        """Read one line. Returns None if no data within timeout, '' on EOF,
+        or the line itself. Falls back to blocking readline when stdout doesn't
+        expose a real fd (e.g. io.StringIO in tests)."""
+        stdout = self._proc.stdout
+        try:
+            fd = stdout.fileno()
+        except (AttributeError, ValueError, io.UnsupportedOperation):
+            return stdout.readline()
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if not ready:
+            return None
+        return stdout.readline()
+
     def _run_batch(self, args: list[str]) -> tuple[bool, str]:
         """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
         # The -stay_open -@ - protocol uses newline as arg separator; any arg
@@ -152,7 +173,15 @@ class ExiftoolBatch:
 
             output_lines = []
             while True:
-                line = self._proc.stdout.readline()
+                line = self._readline_with_timeout(EXIFTOOL_READ_TIMEOUT_SEC)
+                if line is None:
+                    log.error("exiftool unresponsive after %.1fs, killing",
+                              EXIFTOOL_READ_TIMEOUT_SEC)
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                    return False, "exiftool read timeout"
                 if not line:
                     return False, "".join(output_lines)  # process died
                 if line.strip() == "{ready}":
