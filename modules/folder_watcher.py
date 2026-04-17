@@ -85,6 +85,7 @@ class FolderWatcher:
         self._pause_event = threading.Event()
         self._pause_event.set()  # not paused by default
         self._lock = threading.Lock()
+        self._scan_lock = threading.Lock()  # Prevent concurrent scans
         self._processing_count = 0
         self._store: ResultStore | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -253,43 +254,45 @@ class FolderWatcher:
 
     def _scan_folder_into_queue(self, folder: str) -> tuple[int, int]:
         """Scan the given folder and enqueue unprocessed photos. Returns (enqueued, skipped)."""
-        all_photos = _scan_recursive(folder)
-        enqueued = 0
-        skipped = 0
+        with self._scan_lock:
+            all_photos = _scan_recursive(folder)
+            enqueued = 0
+            skipped = 0
 
-        for photo_path in all_photos:
-            if self._stop_event.is_set():
-                break
+            for photo_path in all_photos:
+                if self._stop_event.is_set():
+                    break
 
-            # Fast path: check local DB first
-            status = self._store.get_status(photo_path)
-            if status == "completed":
-                skipped += 1
-                continue
+                # Fast path: check local DB first. Skip both completed and failed —
+                # failed photos are not auto-retried; user must clear status manually.
+                status = self._store.get_status(photo_path)
+                if status in ("completed", "failed"):
+                    skipped += 1
+                    continue
 
-            # For unknown or failed files, check IPTC (cross-machine dedup)
-            if status is None:
-                try:
-                    if has_happy_vision_tag(photo_path):
-                        # Another machine processed it — record locally and skip
-                        self._store.save_result(photo_path, {
-                            "file_path": photo_path,
-                            "source": "external",
-                        })
-                        skipped += 1
-                        continue
-                except Exception:
-                    log.warning("Cannot read IPTC for %s, will try to process", photo_path)
+                # For unknown or failed files, check IPTC (cross-machine dedup)
+                if status is None:
+                    try:
+                        if has_happy_vision_tag(photo_path):
+                            # Another machine processed it — record locally and skip
+                            self._store.save_result(photo_path, {
+                                "file_path": photo_path,
+                                "source": "external",
+                            })
+                            skipped += 1
+                            continue
+                    except Exception:
+                        log.warning("Cannot read IPTC for %s, will try to process", photo_path)
 
-            # Check file readiness
-            if not file_size_stable(photo_path):
-                skipped += 1
-                continue
+                # Check file readiness
+                if not file_size_stable(photo_path):
+                    skipped += 1
+                    continue
 
-            self._queue.put(photo_path)
-            enqueued += 1
+                self._queue.put(photo_path)
+                enqueued += 1
 
-        return enqueued, skipped
+            return enqueued, skipped
 
     def _worker_loop(self) -> None:
         """Process photos from the queue."""

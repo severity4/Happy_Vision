@@ -182,8 +182,8 @@ def test_dedup_enqueues_new_photo(tmp_path):
     store.close()
 
 
-def test_failed_photos_are_retried(tmp_path):
-    """Photos marked as failed in DB should be re-enqueued."""
+def test_failed_photos_are_skipped(tmp_path):
+    """Photos marked as failed in DB should NOT be re-enqueued."""
     photo = tmp_path / "failed.jpg"
     photo.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
 
@@ -197,7 +197,7 @@ def test_failed_photos_are_retried(tmp_path):
     with patch("modules.folder_watcher.file_size_stable", return_value=True):
         watcher._scan_and_enqueue()
 
-    assert watcher.queue_size == 1
+    assert watcher.queue_size == 0
     store.close()
 
 
@@ -459,3 +459,30 @@ def test_set_concurrency_idempotent_at_same_value(tmp_path, monkeypatch):
     assert watcher._executor is old_executor
 
     watcher.stop()
+
+
+def test_scan_skips_failed_photos(tmp_path, monkeypatch):
+    """_scan_folder_into_queue must NOT re-enqueue photos already marked failed."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+    from modules.result_store import ResultStore
+
+    (tmp_path / "p1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    (tmp_path / "p2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+    monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
+    monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
+
+    # Pre-seed: p1 is failed, p2 is new
+    store = ResultStore()
+    store.mark_failed(str(tmp_path / "p1.jpg"), "prior failure")
+    store.close()
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher._store = ResultStore()
+    enqueued, skipped = watcher._scan_folder_into_queue(str(tmp_path))
+    watcher._store.close()
+
+    assert enqueued == 1  # only p2
+    assert skipped == 1  # p1 skipped because failed
