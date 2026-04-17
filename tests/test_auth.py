@@ -76,3 +76,21 @@ def test_correct_token_via_query_param_allowed():
     req.path = "/api/watch/events"
     req.args = {"token": auth.SESSION_TOKEN}
     assert auth.is_request_allowed(req) is True
+
+
+def test_health_prefix_not_bypassable_with_suffix():
+    """Paths like /api/healthz must NOT bypass auth (regression test).
+
+    The earlier implementation used startswith("/api/health") which would
+    silently expose any future /api/healthz-style endpoint.
+    """
+    req = _mock_request(host="evil.com", path="/api/healthz")
+    assert auth.is_request_allowed(req) is False
+
+    req = _mock_request(host="evil.com", path="/api/health_internal")
+    assert auth.is_request_allowed(req) is False
+
+
+def test_health_with_trailing_slash_allowed():
+    req = _mock_request(host="evil.com", path="/api/health/")
+    assert auth.is_request_allowed(req) is True

@@ -19,7 +19,7 @@ _ALLOWED_ORIGINS = {
     "http://localhost:8081",
     "null",  # pywebview file:// frames present Origin: null
 }
-_PUBLIC_PREFIXES = ("/api/health",)
+_PUBLIC_PATHS = {"/api/health", "/api/health/"}
 
 
 def is_request_allowed(request) -> bool:
@@ -37,7 +37,7 @@ def is_request_allowed(request) -> bool:
         return True
 
     # Public API endpoints
-    if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+    if path in _PUBLIC_PATHS:
         return True
 
     host = request.headers.get("Host", "")
