@@ -129,14 +129,14 @@ def serve_photo():
     """Serve a photo file by path (for thumbnail display in frontend)."""
     photo_path = request.args.get("path", "")
     if not photo_path:
-        return jsonify({"error": "File not found"}), 404
+        return jsonify({"error": "Not found"}), 404
     p = Path(photo_path)
     if p.suffix.lower() not in {".jpg", ".jpeg"}:
-        return jsonify({"error": "Forbidden"}), 403
+        return jsonify({"error": "Not found"}), 404
     if not p.is_file():
-        return jsonify({"error": "File not found"}), 404
+        return jsonify({"error": "Not found"}), 404
     if not _path_is_allowed(p):
-        return jsonify({"error": "Forbidden"}), 403
+        return jsonify({"error": "Not found"}), 404
     return send_file(str(p), mimetype="image/jpeg")
 
 

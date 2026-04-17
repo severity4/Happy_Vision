@@ -41,7 +41,7 @@ def test_serve_photo_outside_allowed_root_rejected(client, tmp_path, monkeypatch
     outside = tmp_path / "outside.jpg"
     outside.write_bytes(b"\xff\xd8\xff\xd9")
     r = client.get(f"/api/photo?path={outside}")
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 def test_serve_photo_non_jpg_rejected(client, tmp_path, monkeypatch):
@@ -51,7 +51,7 @@ def test_serve_photo_non_jpg_rejected(client, tmp_path, monkeypatch):
     txt = tmp_path / "note.txt"
     txt.write_text("hello")
     r = client.get(f"/api/photo?path={txt}")
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 def test_serve_photo_inside_allowed_root_ok(client, tmp_path, monkeypatch):
@@ -65,7 +65,7 @@ def test_serve_photo_inside_allowed_root_ok(client, tmp_path, monkeypatch):
 
 
 def test_traversal_attempt_rejected(client, tmp_path, monkeypatch):
-    """Path with .. that resolves outside allowed roots must 403."""
+    """Path with .. that resolves outside allowed roots must 404."""
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
     (tmp_path / "home").mkdir()
     photos = tmp_path / "photos"
@@ -75,4 +75,25 @@ def test_traversal_attempt_rejected(client, tmp_path, monkeypatch):
     (tmp_path / "evil.jpg").write_bytes(b"\xff\xd8\xff\xd9")
     evil = photos / ".." / "evil.jpg"
     r = client.get(f"/api/photo?path={evil}")
-    assert r.status_code == 403
+    assert r.status_code == 404
+
+
+def test_symlink_inside_root_pointing_outside_rejected(client, tmp_path, monkeypatch):
+    """A symlink inside an allowed root that points outside must NOT be served."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    (tmp_path / "home").mkdir()
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    register_allowed_root(allowed)
+
+    # Real target outside allowed
+    target = tmp_path / "secret.jpg"
+    target.write_bytes(b"\xff\xd8\xff\xd9")
+
+    # Symlink inside allowed -> target outside
+    link = allowed / "leak.jpg"
+    link.symlink_to(target)
+
+    r = client.get(f"/api/photo?path={link}")
+    # resolve() follows the symlink; target is outside allowed → rejected as not found
+    assert r.status_code == 404
