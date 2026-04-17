@@ -12,7 +12,7 @@ export const useWatchStore = defineStore('watch', () => {
 
   let eventSource = null
   let reconnectTimer = null
-  let sseConnected = false
+  const sseConnected = ref(false)
 
   async function fetchStatus() {
     try {
@@ -44,7 +44,7 @@ export const useWatchStore = defineStore('watch', () => {
     eventSource = new EventSource(`/api/watch/events?token=${encodeURIComponent(token)}`)
 
     eventSource.onopen = () => {
-      sseConnected = true
+      sseConnected.value = true
     }
 
     eventSource.addEventListener('watch_progress', (e) => {
@@ -67,7 +67,7 @@ export const useWatchStore = defineStore('watch', () => {
     })
 
     eventSource.onerror = () => {
-      sseConnected = false
+      sseConnected.value = false
       if (eventSource) {
         eventSource.close()
         eventSource = null
@@ -92,7 +92,7 @@ export const useWatchStore = defineStore('watch', () => {
       eventSource.close()
       eventSource = null
     }
-    sseConnected = false
+    sseConnected.value = false
   }
 
   async function init() {
@@ -150,6 +150,7 @@ export const useWatchStore = defineStore('watch', () => {
 
   return {
     status, folder, queueSize, processing, completedToday, failedToday, recentItems,
+    sseConnected,
     init, connectSSE, disconnectSSE, fetchStatus, fetchRecent,
     startWatch, pauseWatch, resumeWatch, stopWatch, enqueueFolder,
   }

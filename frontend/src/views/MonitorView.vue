@@ -53,8 +53,14 @@
               }"
             ></span>
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium text-text-primary leading-tight">
-                {{ watchStore.status === 'watching' ? '監控中' : watchStore.status === 'paused' ? '已暫停' : '已停止' }}
+              <p class="text-sm font-medium text-text-primary leading-tight flex items-center">
+                <span>{{ watchStore.status === 'watching' ? '監控中' : watchStore.status === 'paused' ? '已暫停' : '已停止' }}</span>
+                <span v-if="!watchStore.sseConnected" class="inline-flex items-center gap-1 text-[10px] text-amber-500 ml-2">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  連線中斷
+                </span>
               </p>
               <p v-if="displayFolder" class="text-[11px] text-text-tertiary font-mono truncate mt-0.5">{{ displayFolder }}</p>
               <p v-else class="text-[11px] text-text-tertiary mt-0.5">尚未設定資料夾</p>

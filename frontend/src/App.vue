@@ -181,6 +181,13 @@ function dismissUpdate() {
   stopPolling()
 }
 
+function handleVisibilityChange() {
+  if (!document.hidden) {
+    watchStore.fetchStatus()
+    watchStore.fetchRecent()
+  }
+}
+
 onMounted(async () => {
   try {
     const res = await fetch('/api/health')
@@ -191,6 +198,9 @@ onMounted(async () => {
   // Initialize watch store (fetch status, recent, connect SSE)
   watchStore.init()
 
+  // Refresh store state when window comes back from background
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
   // Check for updates after a short delay (don't block startup)
   setTimeout(checkForUpdate, 2000)
 })
@@ -198,6 +208,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPolling()
   watchStore.disconnectSSE()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
