@@ -10,7 +10,7 @@ from pathlib import Path
 from modules.config import load_config, save_config
 from modules.gemini_vision import analyze_photo
 from modules.logger import setup_logger
-from modules.metadata_writer import has_happy_vision_tag, write_metadata
+from modules.metadata_writer import ExiftoolBatch, build_exiftool_args, has_happy_vision_tag
 from modules.result_store import ResultStore
 
 log = setup_logger("folder_watcher")
@@ -88,6 +88,7 @@ class FolderWatcher:
         self._processing_count = 0
         self._store: ResultStore | None = None
         self._executor: ThreadPoolExecutor | None = None
+        self._batch: "ExiftoolBatch | None" = None
 
     @property
     def state(self) -> str:
@@ -136,6 +137,7 @@ class FolderWatcher:
         self._pause_event.set()
         self._store = ResultStore()
         self._executor = ThreadPoolExecutor(max_workers=self._concurrency)
+        self._batch = ExiftoolBatch()
 
         self._state = "watching"
         self._callbacks.on_state_change("watching")
@@ -183,6 +185,11 @@ class FolderWatcher:
         if self._executor:
             self._executor.shutdown(wait=True)
             self._executor = None
+
+        # Close batch after workers finish, before closing store
+        if self._batch:
+            self._batch.close()
+            self._batch = None
 
         self._state = "stopped"
         self._callbacks.on_state_change("stopped")
@@ -294,7 +301,12 @@ class FolderWatcher:
                 self._executor.submit(self._process_one, photo_path)
 
     def _process_one(self, photo_path: str) -> None:
-        """Analyze a single photo and write metadata."""
+        """Analyze a single photo, write metadata, then mark completed.
+
+        Pipeline-aligned semantics: save_result('completed') fires only after
+        metadata successfully lands on disk, so DB completed implies IPTC is
+        written.
+        """
         with self._lock:
             self._processing_count += 1
 
@@ -305,14 +317,25 @@ class FolderWatcher:
 
             result = analyze_photo(photo_path, api_key=api_key, model=model)
 
-            if result:
-                self._store.save_result(photo_path, result)
-                write_metadata(photo_path, result)
-                log.info("Processed: %s", photo_path)
-                self._callbacks.on_processed(photo_path, self._queue.qsize())
-            else:
-                self._store.mark_failed(photo_path, "Analysis returned no result")
+            if not result:
+                if self._store:
+                    self._store.mark_failed(photo_path, "Analysis returned no result")
                 self._callbacks.on_error(photo_path, "Analysis returned no result")
+                return
+
+            # Write metadata first; only mark completed if IPTC actually lands
+            if self._batch is not None:
+                args = build_exiftool_args(result) + ["-overwrite_original"]
+                if not self._batch.write(photo_path, args):
+                    if self._store:
+                        self._store.mark_failed(photo_path, "Metadata write failed")
+                    self._callbacks.on_error(photo_path, "Metadata write failed")
+                    return
+
+            if self._store:
+                self._store.save_result(photo_path, result)
+            log.info("Processed: %s", photo_path)
+            self._callbacks.on_processed(photo_path, self._queue.qsize())
         except Exception as e:
             log.exception("Failed to process %s", photo_path)
             if self._store:

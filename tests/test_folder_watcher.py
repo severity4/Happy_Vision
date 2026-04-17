@@ -263,3 +263,124 @@ def test_stop_waits_for_in_flight_workers(tmp_path, monkeypatch):
     for _, err in errors_seen:
         assert "closed" not in err.lower()
         assert "programmingerror" not in err.lower()
+
+
+def test_watcher_uses_exiftool_batch_and_writes_before_save(tmp_path, monkeypatch):
+    """_process_one must call ExiftoolBatch.write before save_result; if
+    batch.write fails, save_result must not be called (mark_failed instead)."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+
+    (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    calls = []
+
+    class SpyBatch:
+        def __init__(self):
+            calls.append(("batch_init",))
+        def write(self, path, args):
+            calls.append(("batch_write", path))
+            return True
+        def close(self):
+            calls.append(("batch_close",))
+
+    monkeypatch.setattr(fw, "ExiftoolBatch", SpyBatch)
+    monkeypatch.setattr(
+        fw, "analyze_photo",
+        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
+                            "category": "other", "scene_type": "indoor",
+                            "mood": "neutral", "people_count": 0},
+    )
+    monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
+    monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
+    monkeypatch.setattr(
+        fw, "load_config",
+        lambda: {"gemini_api_key": "k", "watch_concurrency": 1,
+                 "watch_interval": 1, "model": "lite"},
+    )
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    # Spy on save_result
+    save_calls = []
+    orig_save = fw.ResultStore.save_result
+    def track_save(self, path, data):
+        save_calls.append(path)
+        orig_save(self, path, data)
+    monkeypatch.setattr(fw.ResultStore, "save_result", track_save)
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher.start(folder=str(tmp_path))
+    watcher.enqueue_folder(str(tmp_path))
+
+    # Wait until processing settles
+    import time
+    for _ in range(50):
+        if save_calls:
+            break
+        time.sleep(0.1)
+
+    watcher.stop()
+
+    # Batch used (init + write + close at least once each)
+    assert any(c[0] == "batch_init" for c in calls)
+    assert any(c[0] == "batch_write" for c in calls)
+    assert any(c[0] == "batch_close" for c in calls)
+    # save_result was called AFTER batch_write for the photo
+    write_idx = next(i for i, c in enumerate(calls) if c[0] == "batch_write")
+    assert len(save_calls) == 1
+
+
+def test_watcher_metadata_failure_marks_failed_not_completed(tmp_path, monkeypatch):
+    """If ExiftoolBatch.write returns False, save_result must NOT be called;
+    mark_failed must be called instead."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+
+    (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    class FailingBatch:
+        def __init__(self): pass
+        def write(self, path, args): return False
+        def close(self): pass
+
+    monkeypatch.setattr(fw, "ExiftoolBatch", FailingBatch)
+    monkeypatch.setattr(
+        fw, "analyze_photo",
+        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
+                            "category": "other", "scene_type": "indoor",
+                            "mood": "neutral", "people_count": 0},
+    )
+    monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
+    monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
+    monkeypatch.setattr(
+        fw, "load_config",
+        lambda: {"gemini_api_key": "k", "watch_concurrency": 1,
+                 "watch_interval": 1, "model": "lite"},
+    )
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    errors = []
+    class CB(WatcherCallbacks):
+        def on_error(self, path, err): errors.append((path, err))
+
+    watcher = FolderWatcher(CB())
+    watcher.start(folder=str(tmp_path))
+    watcher.enqueue_folder(str(tmp_path))
+
+    import time
+    for _ in range(50):
+        if errors:
+            break
+        time.sleep(0.1)
+
+    watcher.stop()
+
+    assert len(errors) == 1
+    assert "metadata" in errors[0][1].lower()
+
+    # Verify DB status is 'failed', not 'completed'
+    from modules.result_store import ResultStore
+    store = ResultStore()
+    status = store.get_status(str(tmp_path / "p.jpg"))
+    store.close()
+    assert status == "failed"

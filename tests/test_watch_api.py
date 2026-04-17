@@ -167,7 +167,9 @@ def test_enqueue_autostarts_watcher_when_stopped(client, tmp_path):
             with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
                 with patch("modules.folder_watcher.file_size_stable", return_value=True):
                     with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
-                        with patch("modules.folder_watcher.write_metadata", return_value=True):
+                        fake_batch = MagicMock()
+                        fake_batch.write.return_value = True
+                        with patch("modules.folder_watcher.ExiftoolBatch", return_value=fake_batch):
                             res = client.post("/api/watch/enqueue", json={"folder": str(enqueue_dir)})
                             assert res.status_code == 200
                             data = res.get_json()
@@ -202,7 +204,9 @@ def test_enqueue_returns_counts(client, tmp_path):
             with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
                 with patch("modules.folder_watcher.file_size_stable", return_value=True):
                     with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
-                        with patch("modules.folder_watcher.write_metadata", return_value=True):
+                        fake_batch = MagicMock()
+                        fake_batch.write.return_value = True
+                        with patch("modules.folder_watcher.ExiftoolBatch", return_value=fake_batch):
                             res = client.post("/api/watch/enqueue", json={"folder": str(enqueue_dir)})
                             assert res.status_code == 200
                             data = res.get_json()
