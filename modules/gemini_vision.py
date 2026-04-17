@@ -199,9 +199,14 @@ def analyze_photo(
 
         except Exception as e:
             error_str = str(e)
-            if "429" in error_str or "500" in error_str or "503" in error_str:
+            retryable_markers = (
+                "429", "500", "502", "503", "504",
+                "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED",
+                "UNAVAILABLE", "INTERNAL",
+            )
+            if any(m in error_str for m in retryable_markers):
                 wait = 2 ** attempt
-                log.warning("API error for %s (attempt %d/%d), retrying in %ds: %s",
+                log.warning("Retryable API error for %s (attempt %d/%d), retry in %ds: %s",
                             photo_path, attempt + 1, max_retries, wait, error_str)
                 time.sleep(wait)
                 continue
