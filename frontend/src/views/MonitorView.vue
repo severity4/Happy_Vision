@@ -389,7 +389,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useWatchStore } from '../stores/watch'
 import { useSettingsStore } from '../stores/settings'
 
@@ -406,6 +406,10 @@ const enqueueResult = ref(null)
 const selected = ref(null)
 const detailData = ref(null)
 const detailLoading = ref(false)
+
+// Tick every 30s so formatTime() re-runs on computed timestamps.
+const timeTick = ref(0)
+let tickTimer = null
 
 const hasApiKey = computed(() => !!settingsStore.settings.gemini_api_key_set)
 const configuredFolder = computed(() => settingsStore.settings.watch_folder || '')
@@ -424,6 +428,9 @@ function relativePath(fullPath) {
 }
 
 function formatTime(isoString) {
+  // Reactive dependency: re-run when 30s tick advances
+  // eslint-disable-next-line no-unused-expressions
+  timeTick.value
   if (!isoString) return ''
   const d = new Date(isoString)
   const now = new Date()
@@ -502,6 +509,11 @@ function closeDetail() {
 
 onMounted(async () => {
   await settingsStore.fetchSettings()
+  tickTimer = setInterval(() => { timeTick.value++ }, 30_000)
+})
+
+onUnmounted(() => {
+  if (tickTimer) clearInterval(tickTimer)
 })
 </script>
 

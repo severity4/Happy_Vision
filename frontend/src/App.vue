@@ -132,7 +132,15 @@ async function checkForUpdate() {
     const data = await res.json()
     update.status = data.status
     update.latestVersion = data.latest_version || ''
-    update.show = data.status === 'available'
+
+    if (data.status === 'available') {
+      // Skip banner if user already dismissed this exact version
+      const dismissed = localStorage.getItem('hv_dismissed_update')
+      if (dismissed === data.latest_version) {
+        return
+      }
+      update.show = true
+    }
   } catch {
     // Silently fail — don't bother user if check fails
   }
@@ -179,6 +187,10 @@ async function restartApp() {
 function dismissUpdate() {
   update.show = false
   stopPolling()
+  // Remember which version was dismissed so we don't repeatedly bug the user
+  if (update.latestVersion) {
+    localStorage.setItem('hv_dismissed_update', update.latestVersion)
+  }
 }
 
 function handleVisibilityChange() {
