@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
+from modules import update_verify
+
 GITHUB_REPO = "severity4/Happy_Vision"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -115,6 +117,8 @@ def download_and_install() -> dict:
         req = Request(url)
         with urlopen(req, timeout=300) as resp:
             total = int(resp.headers.get("Content-Length", 0))
+            if total > 0:
+                update_verify.verify_size(total)
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
             downloaded = 0
             while True:
@@ -123,6 +127,10 @@ def download_and_install() -> dict:
                     break
                 tmp.write(chunk)
                 downloaded += len(chunk)
+                if downloaded > update_verify.MAX_ZIP_SIZE:
+                    tmp.close()
+                    Path(tmp.name).unlink(missing_ok=True)
+                    raise ValueError("Update exceeded size limit during download")
                 if total > 0:
                     with _lock:
                         _update_state["progress"] = int(downloaded / total * 100)
@@ -146,14 +154,14 @@ def download_and_install() -> dict:
 
 def _apply_update(zip_path: str):
     """Extract downloaded zip and replace the current .app bundle."""
-    extract_dir = tempfile.mkdtemp(prefix="happyvision_update_")
+    extract_dir = Path(tempfile.mkdtemp(prefix="happyvision_update_"))
 
-    # Unzip
-    subprocess.run(["unzip", "-o", "-q", zip_path, "-d", extract_dir], check=True)
+    # Safe extraction with zip slip + absolute path protection
+    update_verify.safe_extract(Path(zip_path), extract_dir)
 
     # Find the .app inside extracted files
     app_bundle = None
-    for item in Path(extract_dir).rglob("*.app"):
+    for item in extract_dir.rglob("*.app"):
         app_bundle = item
         break
 
