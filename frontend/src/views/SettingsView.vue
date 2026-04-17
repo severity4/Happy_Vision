@@ -43,6 +43,15 @@
             儲存
           </button>
         </div>
+        <p class="text-xs text-text-tertiary mt-2.5 leading-relaxed">
+          還沒有 API Key？到
+          <a
+            href="https://aistudio.google.com/apikey"
+            @click.prevent="openExternal('https://aistudio.google.com/apikey')"
+            class="text-accent-violet hover:underline font-medium cursor-pointer"
+          >Google AI Studio</a>
+          用 Google 帳號登入，點「Create API key」就能拿到一組免費的 key（形如 <code class="font-mono text-[0.7rem] px-1 py-0.5 bg-surface-0 rounded border border-border-default">AIzaSy...</code>），複製後貼進上面欄位。
+        </p>
       </div>
 
       <!-- Tester identity -->
@@ -254,6 +263,20 @@ const machineName = ref('')
 const model = ref('lite')
 const concurrency = ref(1)
 const skipExisting = ref(false)
+
+async function openExternal(url) {
+  try {
+    const res = await fetch('/api/system/open_external', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+    if (!res.ok) throw new Error('backend refused')
+  } catch {
+    // Backend unavailable or errored — fall back to new-tab open.
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
 
 const watchFolder = ref('')
 const showBrowser = ref(false)

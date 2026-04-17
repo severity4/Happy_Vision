@@ -2,6 +2,7 @@
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -10,6 +11,11 @@ from pathlib import Path
 from modules.logger import setup_logger
 
 log = setup_logger("metadata_writer")
+
+# Max seconds to wait for one line from exiftool before killing the process.
+# Picked to be longer than any reasonable tag write on a large JPEG but short
+# enough that a genuinely hung exiftool doesn't freeze the worker pool.
+EXIFTOOL_READ_TIMEOUT_SEC = 30.0
 
 
 def _get_exiftool_cmd() -> str:
@@ -117,6 +123,9 @@ class ExiftoolBatch:
     ~200ms Perl startup per photo. Instances are thread-safe.
     """
 
+    _UNSAFE_CHARS = ("\n", "\r", "\x00")
+    _EOF = object()  # sentinel on the queue for "reader thread saw EOF"
+
     def __init__(self):
         self._lock = threading.Lock()
         self._proc = None  # set below; keep assigned so close() is always safe
@@ -128,9 +137,47 @@ class ExiftoolBatch:
             text=True,
             bufsize=1,
         )
+        # Background reader drains stdout into a queue so the main thread can
+        # wait with a timeout. Avoids the select/TextIOWrapper-buffer trap
+        # where select on the raw fd misses data already buffered in Python.
+        self._output_queue: queue.Queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True, name="exiftool-reader",
+        )
+        self._reader_thread.start()
+
+    def _reader_loop(self) -> None:
+        """Drain exiftool stdout line by line into the queue until EOF."""
+        stdout = self._proc.stdout
+        try:
+            for line in iter(stdout.readline, ""):
+                self._output_queue.put(line)
+        except (ValueError, OSError):
+            pass
+        finally:
+            self._output_queue.put(self._EOF)
+
+    def _readline_with_timeout(self, timeout: float) -> str | None:
+        """Return next line from reader thread's queue, or None on timeout,
+        '' on EOF."""
+        try:
+            item = self._output_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if item is self._EOF:
+            return ""
+        return item
 
     def _run_batch(self, args: list[str]) -> tuple[bool, str]:
         """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
+        # The -stay_open -@ - protocol uses newline as arg separator; any arg
+        # containing \n / \r / NUL would corrupt the session for every
+        # subsequent write. Reject at the gate instead of silently breaking.
+        for arg in args:
+            if any(c in arg for c in self._UNSAFE_CHARS):
+                log.error("Rejecting exiftool arg with unsafe chars: %r", arg)
+                return False, "unsafe arg"
+
         with self._lock:
             try:
                 for arg in args:
@@ -142,7 +189,15 @@ class ExiftoolBatch:
 
             output_lines = []
             while True:
-                line = self._proc.stdout.readline()
+                line = self._readline_with_timeout(EXIFTOOL_READ_TIMEOUT_SEC)
+                if line is None:
+                    log.error("exiftool unresponsive after %.1fs, killing",
+                              EXIFTOOL_READ_TIMEOUT_SEC)
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                    return False, "exiftool read timeout"
                 if not line:
                     return False, "".join(output_lines)  # process died
                 if line.strip() == "{ready}":

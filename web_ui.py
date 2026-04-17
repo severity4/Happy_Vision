@@ -12,6 +12,7 @@ from api.analysis import analysis_bp
 from api.export import export_bp
 from api.results import results_bp
 from api.settings import settings_bp
+from api.system import system_bp
 from api.update import update_bp
 from api.watch import watch_bp, auto_start_watcher
 from modules.auth import SESSION_TOKEN, is_request_allowed  # noqa: E402
@@ -66,6 +67,7 @@ app.register_blueprint(results_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(watch_bp)
 app.register_blueprint(update_bp)
+app.register_blueprint(system_bp)
 
 # Register allowed roots before starting watcher
 from modules.config import load_config  # noqa: E402

@@ -161,8 +161,12 @@ def analyze_photo(
 
     client = _get_client(api_key)
 
-    # Global rate limit (shared by pipeline workers and folder watcher)
-    default_limiter.acquire()
+    # Global rate limit (shared by pipeline workers and folder watcher).
+    # 60s cap lets cancel/shutdown propagate instead of blocking forever if
+    # the token bucket is misconfigured or contended beyond patience.
+    if not default_limiter.acquire(timeout=60):
+        log.warning("Rate limiter timeout for %s — giving up", photo_path)
+        return None
 
     for attempt in range(max_retries):
         try:
@@ -195,9 +199,14 @@ def analyze_photo(
 
         except Exception as e:
             error_str = str(e)
-            if "429" in error_str or "500" in error_str or "503" in error_str:
+            retryable_markers = (
+                "429", "500", "502", "503", "504",
+                "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED",
+                "UNAVAILABLE", "INTERNAL",
+            )
+            if any(m in error_str for m in retryable_markers):
                 wait = 2 ** attempt
-                log.warning("API error for %s (attempt %d/%d), retrying in %ds: %s",
+                log.warning("Retryable API error for %s (attempt %d/%d), retry in %ds: %s",
                             photo_path, attempt + 1, max_retries, wait, error_str)
                 time.sleep(wait)
                 continue

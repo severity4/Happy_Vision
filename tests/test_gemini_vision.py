@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
 from PIL import Image
 
 from modules.gemini_vision import (
@@ -17,6 +18,16 @@ from modules.gemini_vision import (
     CATEGORY_ENUM,
     MOOD_ENUM,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_client_cache():
+    """Every test starts with an empty client cache so patched genai.Client
+    is actually instantiated instead of reusing a cached mock from a prior test."""
+    from modules import gemini_vision
+    gemini_vision._client_cache.clear()
+    yield
+    gemini_vision._client_cache.clear()
 
 
 def test_model_map_has_lite_and_flash():
@@ -154,3 +165,97 @@ def test_client_cache_reuses_instance(monkeypatch):
     assert c1 is c2
     assert c1 is not c3
     assert created == ["key-abc", "key-xyz"]
+
+
+def test_analyze_photo_retries_on_deadline_exceeded(tmp_path, monkeypatch):
+    """DEADLINE_EXCEEDED / RESOURCE_EXHAUSTED / UNAVAILABLE 都要 retry."""
+    from modules import gemini_vision
+    from modules import rate_limiter
+
+    img_path = tmp_path / "test.jpg"
+    _create_test_jpg(img_path)
+
+    monkeypatch.setattr(rate_limiter.default_limiter, "acquire",
+                        lambda timeout=None: True)
+    monkeypatch.setattr(gemini_vision.time, "sleep", lambda _s: None)
+
+    good_response = MagicMock()
+    good_response.text = json.dumps({"title": "ok", "description": "", "keywords": [],
+                                     "category": "other", "scene_type": "indoor",
+                                     "mood": "neutral", "people_count": 0})
+
+    call_sequence = [
+        Exception("DEADLINE_EXCEEDED: request timed out"),
+        Exception("RESOURCE_EXHAUSTED: quota"),
+        good_response,
+    ]
+
+    with patch("modules.gemini_vision.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = call_sequence
+
+        result = gemini_vision.analyze_photo(str(img_path), api_key="fake",
+                                             model="lite", max_retries=3)
+
+    assert result is not None
+    assert result["title"] == "ok"
+
+
+def test_analyze_photo_does_not_retry_on_permanent_error(tmp_path, monkeypatch):
+    """INVALID_ARGUMENT / PERMISSION_DENIED 不該 retry."""
+    from modules import gemini_vision
+    from modules import rate_limiter
+
+    img_path = tmp_path / "test.jpg"
+    _create_test_jpg(img_path)
+
+    monkeypatch.setattr(rate_limiter.default_limiter, "acquire",
+                        lambda timeout=None: True)
+    monkeypatch.setattr(gemini_vision.time, "sleep", lambda _s: None)
+
+    call_count = {"n": 0}
+
+    def raise_permanent(*a, **kw):
+        call_count["n"] += 1
+        raise Exception("INVALID_ARGUMENT: bad model name")
+
+    with patch("modules.gemini_vision.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = raise_permanent
+
+        result = gemini_vision.analyze_photo(str(img_path), api_key="fake",
+                                             model="lite", max_retries=3)
+
+    assert result is None
+    assert call_count["n"] == 1  # 只試一次, 沒 retry
+
+
+def test_analyze_photo_respects_rate_limiter_timeout(tmp_path, monkeypatch):
+    """若 rate_limiter.acquire 回 False (timeout), analyze_photo 必須放棄,
+    不能卡在 API 呼叫上."""
+    from modules import gemini_vision
+    from modules import rate_limiter
+
+    img_path = tmp_path / "test.jpg"
+    _create_test_jpg(img_path)
+
+    monkeypatch.setattr(rate_limiter.default_limiter, "acquire",
+                        lambda timeout=None: False)
+
+    call_count = {"n": 0}
+
+    def fail_if_called(*a, **kw):
+        call_count["n"] += 1
+        raise AssertionError("generate_content should not be reached when rate-limited out")
+
+    with patch("modules.gemini_vision.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = fail_if_called
+
+        result = gemini_vision.analyze_photo(str(img_path), api_key="fake", model="lite")
+
+    assert result is None
+    assert call_count["n"] == 0
