@@ -202,11 +202,21 @@ class FolderWatcher:
         log.info("Watcher stopped")
 
     def set_concurrency(self, value: int) -> None:
-        """Update concurrency at runtime."""
+        """Update concurrency at runtime by rebuilding the executor.
+
+        In-flight tasks on the old executor finish; new tasks go to the
+        new executor. Clamps to [1, 10].
+        """
         value = max(1, min(10, value))
+        if value == self._concurrency:
+            return
         self._concurrency = value
-        if self._executor:
-            self._executor._max_workers = value
+        if self._executor is not None:
+            old = self._executor
+            self._executor = ThreadPoolExecutor(max_workers=value)
+            # shutdown(wait=False) so the caller doesn't block; in-flight
+            # tasks continue on the old executor and its threads retire.
+            old.shutdown(wait=False)
         log.info("Concurrency updated to %d", value)
 
     def _poll_loop(self) -> None:

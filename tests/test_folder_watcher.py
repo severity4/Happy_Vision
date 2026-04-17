@@ -384,3 +384,83 @@ def test_watcher_metadata_failure_marks_failed_not_completed(tmp_path, monkeypat
     status = store.get_status(str(tmp_path / "p.jpg"))
     store.close()
     assert status == "failed"
+
+
+def test_set_concurrency_rebuilds_executor(tmp_path, monkeypatch):
+    """set_concurrency should replace the executor, not modify private attrs."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+
+    monkeypatch.setattr(fw, "load_config",
+                        lambda: {"gemini_api_key": "k", "watch_concurrency": 2,
+                                 "watch_interval": 1, "model": "lite"})
+    monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
+    monkeypatch.setattr(fw, "ExiftoolBatch", lambda: type("B", (), {
+        "close": lambda self: None, "write": lambda self, p, a: True,
+    })())
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher.start(folder=str(tmp_path))
+
+    old_executor = watcher._executor
+    assert old_executor is not None
+    assert old_executor._max_workers == 2
+
+    watcher.set_concurrency(5)
+
+    # Executor object must be different
+    assert watcher._executor is not old_executor
+    assert watcher._executor._max_workers == 5
+    # Old executor should be shut down
+    assert old_executor._shutdown
+
+    watcher.stop()
+
+
+def test_set_concurrency_clamps_to_bounds(tmp_path, monkeypatch):
+    """set_concurrency clamps to [1, 10] per existing behavior."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+
+    monkeypatch.setattr(fw, "load_config",
+                        lambda: {"gemini_api_key": "k", "watch_concurrency": 2,
+                                 "watch_interval": 1, "model": "lite"})
+    monkeypatch.setattr(fw, "ExiftoolBatch", lambda: type("B", (), {
+        "close": lambda self: None, "write": lambda self, p, a: True,
+    })())
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher.start(folder=str(tmp_path))
+
+    watcher.set_concurrency(0)
+    assert watcher._concurrency == 1
+
+    watcher.set_concurrency(100)
+    assert watcher._concurrency == 10
+
+    watcher.stop()
+
+
+def test_set_concurrency_idempotent_at_same_value(tmp_path, monkeypatch):
+    """Calling set_concurrency with the current value should NOT rebuild."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+
+    monkeypatch.setattr(fw, "load_config",
+                        lambda: {"gemini_api_key": "k", "watch_concurrency": 3,
+                                 "watch_interval": 1, "model": "lite"})
+    monkeypatch.setattr(fw, "ExiftoolBatch", lambda: type("B", (), {
+        "close": lambda self: None, "write": lambda self, p, a: True,
+    })())
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    watcher = FolderWatcher(WatcherCallbacks())
+    watcher.start(folder=str(tmp_path))
+
+    old_executor = watcher._executor
+    watcher.set_concurrency(3)
+    assert watcher._executor is old_executor
+
+    watcher.stop()
