@@ -42,3 +42,13 @@ def test_scrubs_api_key_in_args():
 def test_does_not_touch_safe_text():
     out = _apply("Analyzed photo.jpg: speaker on stage")
     assert out == "Analyzed photo.jpg: speaker on stage"
+
+
+def test_greedy_match_does_not_leak_key_tail():
+    """Regex must consume entire key even if it's longer than the standard
+    39 chars — defense against malformed or future key variants."""
+    # 42 chars of allowed class after AIza
+    overlong = "AIza" + "A" * 42
+    out = _apply(f"leak? {overlong} trailing")
+    assert "A" * 36 not in out, "any run of 36+ legit chars means tail leaked"
+    assert "trailing" in out

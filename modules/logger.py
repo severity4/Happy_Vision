@@ -12,8 +12,10 @@ from modules.config import get_config_dir
 _REDACT = "REDACTED"
 
 _PATTERNS: list[tuple[re.Pattern, str | None]] = [
-    # Google API key (AIza + 35 alphanumerics / _ / -)
-    (re.compile(r"AIza[0-9A-Za-z_\-]{35}"), None),
+    # Google API key (AIza + ≥35 alphanumerics / _ / -; real keys are exactly
+    # 35 trailing chars but match greedily so malformed or future variants
+    # don't leak a tail).
+    (re.compile(r"AIza[0-9A-Za-z_\-]{35,}"), None),
     # Google OAuth access tokens (ya29.xxxx)
     (re.compile(r"ya29\.[A-Za-z0-9._\-]+"), None),
     # Bearer / Token headers
