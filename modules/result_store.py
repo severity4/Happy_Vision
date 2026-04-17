@@ -161,11 +161,18 @@ class ResultStore:
             self.conn.commit()
 
     def get_results_for_folder(self, folder: str) -> list[dict]:
-        """Get completed results for photos within a specific folder."""
-        folder_prefix = str(Path(folder).resolve())
+        """Get completed results for photos within a specific folder.
+
+        Matches both the caller-supplied folder and its symlink-resolved form,
+        because save_result writes whatever path scan_photos yielded (often
+        unresolved, e.g. /tmp/... on macOS) while a caller later may hand in
+        the resolved form (/private/tmp/...). Union over both prefixes."""
+        raw = str(Path(folder))
+        resolved = str(Path(folder).resolve())
         rows = self.conn.execute(
-            "SELECT file_path, result_json FROM results WHERE status = 'completed' AND file_path LIKE ?",
-            (folder_prefix + "%",),
+            "SELECT file_path, result_json FROM results "
+            "WHERE status = 'completed' AND (file_path LIKE ? OR file_path LIKE ?)",
+            (raw + "%", resolved + "%"),
         ).fetchall()
         results = []
         for row in rows:

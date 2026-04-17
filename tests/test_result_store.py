@@ -123,6 +123,27 @@ def test_get_results_for_folder(tmp_path):
         assert results_b[0]["title"] == "B1"
 
 
+def test_get_results_for_folder_matches_symlinked_path(tmp_path):
+    """On macOS /tmp is a symlink to /private/tmp. Saved paths use the
+    unresolved form; a caller that resolves the folder must still see
+    matching results."""
+    with ResultStore(tmp_path / "test.db") as store:
+        # Simulate: pipeline saved with /tmp prefix, caller queries with
+        # /private/tmp (or vice-versa) — both forms must work.
+        store.save_result("/tmp/shoot/IMG_A.jpg", {"title": "raw"})
+        store.save_result("/private/tmp/shoot/IMG_B.jpg", {"title": "resolved"})
+
+        raw_hits = store.get_results_for_folder("/tmp/shoot")
+        resolved_hits = store.get_results_for_folder("/private/tmp/shoot")
+
+        # /tmp/shoot prefix matches saved /tmp/shoot/IMG_A; its .resolve()
+        # -> /private/tmp/shoot also matches IMG_B. Both paths are found.
+        titles_raw = {r["title"] for r in raw_hits}
+        titles_resolved = {r["title"] for r in resolved_hits}
+        assert "raw" in titles_raw
+        assert "resolved" in titles_resolved
+
+
 def test_wal_mode_enabled(tmp_path):
     store = ResultStore(tmp_path / "test.db")
     mode = store.conn.execute("PRAGMA journal_mode").fetchone()[0]
