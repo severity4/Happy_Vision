@@ -4,6 +4,7 @@ Defense against zip slip (entry paths escaping the extract directory)
 and oversized payloads.
 """
 
+import stat
 import zipfile
 from pathlib import Path
 
@@ -18,16 +19,38 @@ def verify_size(size_bytes: int) -> None:
         )
 
 
+def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
+    """Detect a symlink zip entry via the unix mode in external_attr."""
+    unix_mode = (info.external_attr >> 16) & 0xFFFF
+    return stat.S_ISLNK(unix_mode)
+
+
 def safe_extract(zip_path: Path, dest: Path) -> None:
-    """Extract zip_path into dest, rejecting any entry whose resolved path
-    would escape dest (zip slip) or whose name is absolute."""
+    """Extract zip_path into dest, rejecting entries that could escape dest.
+
+    Guards against:
+    - Absolute paths (leading / or \\)
+    - Traversal via .. in either / or \\-separated segments
+    - Null bytes in entry names
+    - Symlink entries (could resolve outside dest after extraction)
+    """
     dest_resolved = Path(dest).resolve()
     with zipfile.ZipFile(zip_path, "r") as zf:
         for info in zf.infolist():
             name = info.filename
-            if name.startswith("/") or ".." in Path(name).parts:
+            if not name:
+                raise ValueError("Zip entry with empty name")
+            if "\x00" in name:
+                raise ValueError(f"Zip entry with null byte: {name!r}")
+            if name.startswith(("/", "\\")):
                 raise ValueError(f"Zip entry outside dest: {name}")
-            target = (dest_resolved / name).resolve()
+            # Normalize both separators so Windows-style paths are inspected
+            normalized = name.replace("\\", "/")
+            if ".." in normalized.split("/"):
+                raise ValueError(f"Zip entry outside dest: {name}")
+            if _is_symlink_entry(info):
+                raise ValueError(f"Symlink zip entry rejected: {name}")
+            target = (dest_resolved / normalized).resolve()
             try:
                 target.relative_to(dest_resolved)
             except ValueError as e:
