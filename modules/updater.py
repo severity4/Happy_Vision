@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 from modules import update_verify
+from modules.config import get_config_dir
 
 GITHUB_REPO = "severity4/Happy_Vision"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -180,53 +181,123 @@ def download_and_install() -> dict:
         return get_state()
 
 
+def _get_current_app() -> Path:
+    """Return the .app bundle containing the running executable."""
+    current_exe = Path(sys.executable)
+    # sys.executable in frozen: /path/to/HappyVision.app/Contents/MacOS/HappyVision
+    return current_exe.parent.parent.parent
+
+
 def _apply_update(zip_path: str):
-    """Extract downloaded zip and replace the current .app bundle."""
-    extract_dir = Path(tempfile.mkdtemp(prefix="happyvision_update_"))
+    """Extract downloaded zip into HAPPY_VISION_HOME/pending_update/.
 
-    # Safe extraction with zip slip + absolute path protection
-    update_verify.safe_extract(Path(zip_path), extract_dir)
+    Does NOT touch the currently running .app — that swap happens in
+    restart_app() via a trampoline script that runs after this process exits.
+    """
+    pending_dir = get_config_dir() / "pending_update"
+    if pending_dir.exists():
+        shutil.rmtree(pending_dir)
+    pending_dir.mkdir(parents=True)
 
-    # Find the .app inside extracted files
-    app_bundle = None
-    for item in extract_dir.rglob("*.app"):
-        app_bundle = item
+    update_verify.safe_extract(Path(zip_path), pending_dir)
+
+    # Sanity check: the new .app must exist under pending/
+    found = None
+    for item in pending_dir.rglob("*.app"):
+        found = item
         break
-
-    if not app_bundle:
+    if not found:
         raise FileNotFoundError("更新檔案中找不到 .app")
 
     if not getattr(sys, "frozen", False):
-        # Dev mode — just clean up, nothing to replace
-        shutil.rmtree(extract_dir, ignore_errors=True)
-        os.unlink(zip_path)
+        # Dev mode — don't touch zip_path, it may be a test fixture
         return
 
-    # Find current .app location
-    # sys.executable in a frozen app: /path/to/HappyVision.app/Contents/MacOS/HappyVision
-    current_exe = Path(sys.executable)
-    current_app = current_exe.parent.parent.parent  # .app bundle root
+    # In production: remove the downloaded zip now that it's extracted
+    try:
+        os.unlink(zip_path)
+    except OSError:
+        pass  # best-effort cleanup
 
-    if not current_app.name.endswith(".app"):
-        raise RuntimeError(f"無法定位目前的 .app: {current_app}")
 
-    # Move old app to trash, move new app in
-    backup = current_app.with_name(current_app.name + ".old")
-    if backup.exists():
-        shutil.rmtree(backup)
-    current_app.rename(backup)
-    shutil.move(str(app_bundle), str(current_app))
+def _build_trampoline_script(current_pid: int, current_app: Path, pending_app: Path) -> str:
+    """Return a bash script body that:
+    1. Waits (polling kill -0) for current_pid to exit, up to 30 seconds.
+    2. Moves current_app to <current_app>.old.
+    3. Moves pending_app into current_app's location.
+    4. Relaunches via /usr/bin/open.
+    5. Cleans up .old and the pending_update directory.
+    6. Self-destructs.
+    """
+    return f"""#!/bin/bash
+set -e
 
-    # Cleanup
-    shutil.rmtree(backup, ignore_errors=True)
-    shutil.rmtree(extract_dir, ignore_errors=True)
-    os.unlink(zip_path)
+PID={current_pid}
+CURRENT={current_app!s}
+PENDING={pending_app!s}
+BACKUP="${{CURRENT}}.old"
+
+# Wait for current process to exit (poll up to 30s)
+for i in $(seq 1 60); do
+  if ! kill -0 "$PID" 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+
+# Swap
+if [ -e "$BACKUP" ]; then
+  rm -rf "$BACKUP"
+fi
+mv "$CURRENT" "$BACKUP"
+mv "$PENDING" "$CURRENT"
+
+# Relaunch
+/usr/bin/open "$CURRENT"
+
+# Cleanup — wait a bit so the new app is fully loaded
+sleep 2
+rm -rf "$BACKUP"
+rm -rf "$(dirname "$PENDING")"
+
+# Self-destruct
+rm -f "$0"
+"""
 
 
 def restart_app():
-    """Restart the application after update."""
-    if getattr(sys, "frozen", False):
-        current_exe = Path(sys.executable)
-        current_app = current_exe.parent.parent.parent
-        subprocess.Popen(["open", str(current_app)])
-        sys.exit(0)
+    """Write a trampoline script that waits for this process to exit, swaps
+    pending_update into the running .app location, and relaunches. Then exit."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    current_app = _get_current_app()
+    if not current_app.name.endswith(".app"):
+        raise RuntimeError(f"無法定位目前的 .app: {current_app}")
+
+    pending_dir = get_config_dir() / "pending_update"
+    pending_app = None
+    for item in pending_dir.rglob("*.app"):
+        pending_app = item
+        break
+    if not pending_app:
+        raise FileNotFoundError("找不到已下載的更新 — 請重新檢查更新")
+
+    script_path = get_config_dir() / "update_trampoline.sh"
+    script_path.write_text(_build_trampoline_script(
+        current_pid=os.getpid(),
+        current_app=current_app,
+        pending_app=pending_app,
+    ))
+    script_path.chmod(0o755)
+
+    # Start trampoline detached (new session), then exit ourselves so the
+    # trampoline can proceed with the swap.
+    subprocess.Popen(
+        ["/bin/bash", str(script_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    sys.exit(0)
