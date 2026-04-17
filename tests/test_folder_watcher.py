@@ -199,3 +199,67 @@ def test_failed_photos_are_retried(tmp_path):
 
     assert watcher.queue_size == 1
     store.close()
+
+
+def test_stop_waits_for_in_flight_workers(tmp_path, monkeypatch):
+    """stop() must not close the store while workers are still writing."""
+    from modules import folder_watcher as fw
+    from modules.folder_watcher import FolderWatcher, WatcherCallbacks
+    import threading
+    import time
+
+    # Seed 3 photos
+    for i in range(3):
+        (tmp_path / f"p{i}.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    # Mock analyze_photo to simulate slow Gemini call
+    enter = threading.Event()
+    proceed = threading.Event()
+    errors_seen = []
+
+    def slow_analyze(path, **kw):
+        enter.set()
+        # Block until test releases us
+        proceed.wait(timeout=5)
+        return {"title": "T", "keywords": [], "description": "",
+                "category": "other", "scene_type": "indoor",
+                "mood": "neutral", "people_count": 0}
+
+    monkeypatch.setattr(fw, "analyze_photo", slow_analyze)
+    monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
+    monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
+    monkeypatch.setattr(fw, "load_config",
+                        lambda: {"gemini_api_key": "k", "watch_concurrency": 2,
+                                 "watch_interval": 1, "model": "lite"})
+
+    class CB(WatcherCallbacks):
+        def on_error(self, path, err):
+            errors_seen.append((path, err))
+
+    # Use a db in tmp_path so we don't touch the real one
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path / "hv"))
+
+    watcher = FolderWatcher(CB())
+    watcher.start(folder=str(tmp_path))
+
+    # Enqueue synchronously
+    watcher.enqueue_folder(str(tmp_path))
+
+    # Wait until at least one worker has entered analyze_photo
+    assert enter.wait(timeout=5), "Worker did not start"
+
+    # Now stop. It must wait for the in-flight worker(s) to finish.
+    stop_thread = threading.Thread(target=watcher.stop)
+    stop_thread.start()
+
+    # Let workers proceed
+    time.sleep(0.1)
+    proceed.set()
+
+    stop_thread.join(timeout=10)
+    assert not stop_thread.is_alive(), "stop() hung"
+
+    # No errors from "Cannot operate on a closed database"
+    for _, err in errors_seen:
+        assert "closed" not in err.lower()
+        assert "programmingerror" not in err.lower()

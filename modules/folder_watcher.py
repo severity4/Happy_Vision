@@ -158,26 +158,36 @@ class FolderWatcher:
         log.info("Watcher paused")
 
     def stop(self) -> None:
-        """Stop watching completely."""
+        """Stop watching completely. Waits for in-flight workers to finish
+        before closing the DB."""
         if self._state == "stopped":
             return
         self._stop_event.set()
         self._pause_event.set()  # unblock if paused
 
-        # Clear the queue
+        # Clear the queue so new items don't get picked up
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
 
+        # Wait for poll + worker threads to exit their loops
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=5)
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5)
+
+        # Shut down executor with wait=True so in-flight _process_one
+        # calls finish before we close the store underneath them.
         if self._executor:
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=True)
             self._executor = None
 
         self._state = "stopped"
         self._callbacks.on_state_change("stopped")
 
+        # NOW it is safe to close the store
         if self._store:
             self._store.close()
             self._store = None
