@@ -51,7 +51,7 @@ def build_exiftool_args(result: dict) -> list[str]:
         ocr_combined = " | ".join(result["ocr_text"])
         args.append(f"-XMP:Comment={ocr_combined}")
 
-    args.append("-XMP-xmp:Instructions=HappyVisionProcessed")
+    args.append("-XMP:UserComment=HappyVisionProcessed")
 
     return args
 
@@ -106,8 +106,8 @@ def read_metadata(photo_path: str) -> dict:
 def has_happy_vision_tag(photo_path: str) -> bool:
     """Check if a photo has already been processed by Happy Vision."""
     metadata = read_metadata(photo_path)
-    instructions = metadata.get("Instructions", "")
-    return "HappyVisionProcessed" in str(instructions)
+    user_comment = metadata.get("UserComment", "")
+    return "HappyVisionProcessed" in str(user_comment)
 
 
 class ExiftoolBatch:
