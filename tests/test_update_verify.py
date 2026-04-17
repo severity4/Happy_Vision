@@ -87,3 +87,47 @@ def test_safe_extract_rejects_backslash_absolute(tmp_path):
     dest.mkdir()
     with pytest.raises(ValueError, match="outside"):
         update_verify.safe_extract(src, dest)
+
+
+def test_verify_sha256_match(tmp_path):
+    f = tmp_path / "data.bin"
+    f.write_bytes(b"hello")
+    import hashlib
+    expected = hashlib.sha256(b"hello").hexdigest()
+    update_verify.verify_sha256(f, expected)  # no raise
+
+
+def test_verify_sha256_mismatch(tmp_path):
+    f = tmp_path / "data.bin"
+    f.write_bytes(b"hello")
+    with pytest.raises(ValueError, match="checksum"):
+        update_verify.verify_sha256(f, "0" * 64)
+
+
+def test_parse_sha256sums_finds_entry():
+    text = (
+        "abc123  HappyVision-0.3.0-macos.zip\n"
+        "def456  OtherFile.zip\n"
+    )
+    assert update_verify.parse_sha256sums(text, "HappyVision-0.3.0-macos.zip") == "abc123"
+
+
+def test_parse_sha256sums_with_binary_star_marker():
+    """shasum's binary mode emits '*' prefix on the filename."""
+    text = "abc123 *HappyVision-0.3.0-macos.zip\n"
+    assert update_verify.parse_sha256sums(text, "HappyVision-0.3.0-macos.zip") == "abc123"
+
+
+def test_parse_sha256sums_missing_entry():
+    text = "abc123  OtherFile.zip\n"
+    with pytest.raises(ValueError, match="not found"):
+        update_verify.parse_sha256sums(text, "HappyVision-0.3.0-macos.zip")
+
+
+def test_parse_sha256sums_ignores_comments_and_blanks():
+    text = (
+        "# Comment line\n"
+        "\n"
+        "abc123  HappyVision.zip\n"
+    )
+    assert update_verify.parse_sha256sums(text, "HappyVision.zip") == "abc123"

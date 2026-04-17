@@ -1,4 +1,4 @@
-.PHONY: dev build serve lint test verify help install app
+.PHONY: dev build serve lint test verify help install app release-checksum
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -30,3 +30,8 @@ install: ## Install all dependencies
 
 app: ## Build macOS .app
 	python3 build_app.py
+
+release-checksum: app ## Generate SHA256SUMS for the release zip
+	@cd dist && shasum -a 256 *.zip > SHA256SUMS
+	@echo "SHA256SUMS written. Upload to GitHub Release alongside the .zip."
+	@cat dist/SHA256SUMS

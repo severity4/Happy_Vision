@@ -22,6 +22,8 @@ _update_state = {
     "progress": 0,          # download progress 0-100
     "latest_version": None,
     "download_url": None,
+    "download_filename": None,
+    "sha256sums_url": None,
     "release_notes": "",
     "error": None,
 }
@@ -75,19 +77,26 @@ def check_for_update() -> dict:
         tag = data.get("tag_name", "")
         current = get_current_version()
 
-        # Find the macOS .zip or .dmg asset
+        # Find the macOS .zip (strict: must contain macos/darwin) and the SHA256SUMS asset
         download_url = None
+        download_filename = None
+        sha256sums_url = None
         for asset in data.get("assets", []):
-            name = asset["name"].lower()
-            if "macos" in name or "darwin" in name or name.endswith(".zip"):
+            name = asset["name"]
+            lower = name.lower()
+            if name == "SHA256SUMS":
+                sha256sums_url = asset["browser_download_url"]
+            elif ("macos" in lower or "darwin" in lower) and lower.endswith(".zip"):
                 download_url = asset["browser_download_url"]
-                break
+                download_filename = name
 
         with _lock:
             if _is_newer(tag, current):
                 _update_state["status"] = "available"
                 _update_state["latest_version"] = tag.lstrip("v")
                 _update_state["download_url"] = download_url
+                _update_state["download_filename"] = download_filename
+                _update_state["sha256sums_url"] = sha256sums_url
                 _update_state["release_notes"] = data.get("body", "")
             else:
                 _update_state["status"] = "idle"
@@ -114,6 +123,22 @@ def download_and_install() -> dict:
 
     try:
         url = state["download_url"]
+        filename = state.get("download_filename") or ""
+        sha256sums_url = state.get("sha256sums_url")
+
+        if not sha256sums_url or not filename:
+            raise RuntimeError(
+                "Release missing SHA256SUMS asset — update rejected. "
+                "Please contact the developer."
+            )
+
+        # 1. Fetch SHA256SUMS (small text file)
+        req_sums = Request(sha256sums_url)
+        with urlopen(req_sums, timeout=30) as resp_sums:
+            sha256sums_text = resp_sums.read().decode()
+        expected_hash = update_verify.parse_sha256sums(sha256sums_text, filename)
+
+        # 2. Download the zip
         req = Request(url)
         with urlopen(req, timeout=300) as resp:
             total = int(resp.headers.get("Content-Length", 0))
@@ -136,7 +161,10 @@ def download_and_install() -> dict:
                         _update_state["progress"] = int(downloaded / total * 100)
             tmp.close()
 
-        # Extract and replace app bundle
+        # 3. Verify SHA256
+        update_verify.verify_sha256(Path(tmp.name), expected_hash)
+
+        # 4. Extract and apply
         _apply_update(tmp.name)
 
         with _lock:

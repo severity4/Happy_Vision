@@ -4,6 +4,7 @@ Defense against zip slip (entry paths escaping the extract directory)
 and oversized payloads.
 """
 
+import hashlib
 import stat
 import zipfile
 from pathlib import Path
@@ -56,3 +57,41 @@ def safe_extract(zip_path: Path, dest: Path) -> None:
             except ValueError as e:
                 raise ValueError(f"Zip entry outside dest: {name}") from e
         zf.extractall(dest_resolved)
+
+
+def verify_sha256(file_path: Path, expected_hex: str) -> None:
+    """Raise ValueError if file's SHA-256 does not match expected_hex (case-insensitive)."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    actual = h.hexdigest()
+    if actual.lower() != expected_hex.lower():
+        raise ValueError(
+            f"Update checksum mismatch: expected {expected_hex[:16]}..., "
+            f"got {actual[:16]}..."
+        )
+
+
+def parse_sha256sums(text: str, filename: str) -> str:
+    """Parse a SHA256SUMS file and return the hex for the given filename.
+
+    Format: one entry per line, '<hex>  <filename>' or '<hex> *<filename>'
+    (the '*' prefix is shasum's binary-mode marker). Blank lines and lines
+    starting with '#' are ignored.
+
+    Raises ValueError if the filename isn't present.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        hex_val, name = parts
+        # shasum binary mode prefixes filename with '*'
+        name = name.lstrip("*").strip()
+        if name == filename:
+            return hex_val
+    raise ValueError(f"Filename not found in SHA256SUMS: {filename}")
