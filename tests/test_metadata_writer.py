@@ -255,31 +255,29 @@ def test_exiftool_batch_timeout_when_readline_hangs(monkeypatch):
     """readline 無資料時, _run_batch 在 timeout 後必須放棄並 kill, 不能卡死."""
     from modules import metadata_writer
     import io
-    import os
+    import threading
     import time
 
     class HangingProc:
         def __init__(self):
             self.stdin = io.StringIO()
             self._killed = False
-            # A pipe that never gets written to — select() will time out.
-            self._r, self._w = os.pipe()
+            # readline blocks on this event; only kill() releases it.
+            self._unblock = threading.Event()
 
             outer = self
 
             class _StdoutLike:
-                def fileno(self_inner):
-                    return outer._r
                 def readline(self_inner):
-                    return ""
+                    outer._unblock.wait()
+                    return ""  # EOF after kill
 
             self.stdout = _StdoutLike()
 
         def kill(self):
             if not self._killed:
                 self._killed = True
-                os.close(self._r)
-                os.close(self._w)
+                self._unblock.set()
 
         def wait(self, timeout=None):
             return -9

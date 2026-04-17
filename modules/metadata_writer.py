@@ -1,9 +1,8 @@
 """modules/metadata_writer.py — IPTC/XMP metadata read/write via exiftool"""
 
-import io
 import json
 import os
-import select
+import queue
 import subprocess
 import sys
 import threading
@@ -124,6 +123,9 @@ class ExiftoolBatch:
     ~200ms Perl startup per photo. Instances are thread-safe.
     """
 
+    _UNSAFE_CHARS = ("\n", "\r", "\x00")
+    _EOF = object()  # sentinel on the queue for "reader thread saw EOF"
+
     def __init__(self):
         self._lock = threading.Lock()
         self._proc = None  # set below; keep assigned so close() is always safe
@@ -135,22 +137,36 @@ class ExiftoolBatch:
             text=True,
             bufsize=1,
         )
+        # Background reader drains stdout into a queue so the main thread can
+        # wait with a timeout. Avoids the select/TextIOWrapper-buffer trap
+        # where select on the raw fd misses data already buffered in Python.
+        self._output_queue: queue.Queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True, name="exiftool-reader",
+        )
+        self._reader_thread.start()
 
-    _UNSAFE_CHARS = ("\n", "\r", "\x00")
-
-    def _readline_with_timeout(self, timeout: float) -> str | None:
-        """Read one line. Returns None if no data within timeout, '' on EOF,
-        or the line itself. Falls back to blocking readline when stdout doesn't
-        expose a real fd (e.g. io.StringIO in tests)."""
+    def _reader_loop(self) -> None:
+        """Drain exiftool stdout line by line into the queue until EOF."""
         stdout = self._proc.stdout
         try:
-            fd = stdout.fileno()
-        except (AttributeError, ValueError, io.UnsupportedOperation):
-            return stdout.readline()
-        ready, _, _ = select.select([fd], [], [], timeout)
-        if not ready:
+            for line in iter(stdout.readline, ""):
+                self._output_queue.put(line)
+        except (ValueError, OSError):
+            pass
+        finally:
+            self._output_queue.put(self._EOF)
+
+    def _readline_with_timeout(self, timeout: float) -> str | None:
+        """Return next line from reader thread's queue, or None on timeout,
+        '' on EOF."""
+        try:
+            item = self._output_queue.get(timeout=timeout)
+        except queue.Empty:
             return None
-        return stdout.readline()
+        if item is self._EOF:
+            return ""
+        return item
 
     def _run_batch(self, args: list[str]) -> tuple[bool, str]:
         """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
