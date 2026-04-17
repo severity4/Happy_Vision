@@ -251,3 +251,44 @@ def test_pipeline_does_not_create_batch_when_metadata_disabled(tmp_path, monkeyp
     )
 
     assert instantiated["n"] == 0
+
+
+def test_pipeline_respects_rate_limiter(tmp_path, monkeypatch):
+    """analyze_photo should call default_limiter.acquire() before each request."""
+    from modules import pipeline as pl
+    from modules import rate_limiter
+
+    for i in range(3):
+        (tmp_path / f"p{i}.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+    acquire_count = {"n": 0}
+
+    def tracking_acquire(timeout=None):
+        acquire_count["n"] += 1
+        return True
+
+    monkeypatch.setattr(rate_limiter.default_limiter, "acquire", tracking_acquire)
+
+    monkeypatch.setattr(
+        pl, "analyze_photo",
+        lambda path, **kw: (rate_limiter.default_limiter.acquire(),
+                            {"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0})[1],
+    )
+
+    class FakeBatch:
+        def write(self, p, a): return True
+        def close(self): pass
+    monkeypatch.setattr(pl, "ExiftoolBatch", FakeBatch)
+
+    pl.run_pipeline(
+        folder=str(tmp_path),
+        api_key="test",
+        concurrency=1,
+        write_metadata=True,
+        db_path=tmp_path / "r.db",
+    )
+
+    # 3 photos → 3 acquires (one per analyze_photo invocation)
+    assert acquire_count["n"] == 3

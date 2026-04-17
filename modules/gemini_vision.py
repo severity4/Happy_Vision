@@ -11,6 +11,7 @@ from google.genai import types
 from PIL import Image
 
 from modules.logger import setup_logger
+from modules.rate_limiter import default_limiter
 
 log = setup_logger("gemini_vision")
 
@@ -159,6 +160,9 @@ def analyze_photo(
     prompt = build_prompt()
 
     client = _get_client(api_key)
+
+    # Global rate limit (shared by pipeline workers and folder watcher)
+    default_limiter.acquire()
 
     for attempt in range(max_retries):
         try:
