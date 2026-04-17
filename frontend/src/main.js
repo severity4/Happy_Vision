@@ -6,6 +6,7 @@ import './style.css'
 
 // Inject per-session auth token into every fetch() call and expose it globally
 // so SSE/EventSource callers can append it as a query param.
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000
 const token = document.querySelector('meta[name="hv-token"]')?.content
 if (token && token !== '__HV_TOKEN__') {
   window.__HV_TOKEN__ = token
@@ -13,7 +14,15 @@ if (token && token !== '__HV_TOKEN__') {
   window.fetch = (input, init = {}) => {
     const headers = new Headers(init.headers || {})
     headers.set('X-HV-Token', token)
-    return originalFetch(input, { ...init, headers })
+
+    // Honor caller-supplied signal; otherwise impose default timeout.
+    if (init.signal) {
+      return originalFetch(input, { ...init, headers })
+    }
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), DEFAULT_FETCH_TIMEOUT_MS)
+    return originalFetch(input, { ...init, headers, signal: ctrl.signal })
+      .finally(() => clearTimeout(timer))
   }
 }
 
