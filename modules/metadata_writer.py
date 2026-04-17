@@ -129,8 +129,18 @@ class ExiftoolBatch:
             bufsize=1,
         )
 
+    _UNSAFE_CHARS = ("\n", "\r", "\x00")
+
     def _run_batch(self, args: list[str]) -> tuple[bool, str]:
         """Feed args + -execute, read output until {ready}. Returns (ok, output)."""
+        # The -stay_open -@ - protocol uses newline as arg separator; any arg
+        # containing \n / \r / NUL would corrupt the session for every
+        # subsequent write. Reject at the gate instead of silently breaking.
+        for arg in args:
+            if any(c in arg for c in self._UNSAFE_CHARS):
+                log.error("Rejecting exiftool arg with unsafe chars: %r", arg)
+                return False, "unsafe arg"
+
         with self._lock:
             try:
                 for arg in args:

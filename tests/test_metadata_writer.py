@@ -251,6 +251,71 @@ def test_exiftool_batch_survives_dead_process(monkeypatch):
     assert ok is False  # must not raise
 
 
+def test_exiftool_batch_rejects_path_with_newline(monkeypatch):
+    """含換行的 path 會破壞 -@ - 協定, 必須拒絕而不是送進去."""
+    from modules import metadata_writer
+    import io
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = self
+        def readline(self): return "{ready}\n"
+        def wait(self, timeout=None): return 0
+        def poll(self): return None
+
+    fake = FakeProc()
+    monkeypatch.setattr(metadata_writer.subprocess, "Popen", lambda *a, **kw: fake)
+
+    batch = metadata_writer.ExiftoolBatch()
+    ok = batch.write("/tmp/bad\nname.jpg", ["-IPTC:Headline=X"])
+
+    assert ok is False
+    # 絕不能把壞 path 送進 stdin
+    assert "bad\nname.jpg" not in fake.stdin.getvalue()
+
+
+def test_exiftool_batch_rejects_path_with_nul(monkeypatch):
+    from modules import metadata_writer
+    import io
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = self
+        def readline(self): return "{ready}\n"
+        def wait(self, timeout=None): return 0
+        def poll(self): return None
+
+    fake = FakeProc()
+    monkeypatch.setattr(metadata_writer.subprocess, "Popen", lambda *a, **kw: fake)
+
+    batch = metadata_writer.ExiftoolBatch()
+    ok = batch.write("/tmp/nul\x00name.jpg", ["-IPTC:Headline=X"])
+    assert ok is False
+
+
+def test_exiftool_batch_rejects_arg_with_newline(monkeypatch):
+    """Args 本身含 \\n 也會破壞協定 (例如 caption 含換行被直接塞)."""
+    from modules import metadata_writer
+    import io
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = self
+        def readline(self): return "{ready}\n"
+        def wait(self, timeout=None): return 0
+        def poll(self): return None
+
+    fake = FakeProc()
+    monkeypatch.setattr(metadata_writer.subprocess, "Popen", lambda *a, **kw: fake)
+
+    batch = metadata_writer.ExiftoolBatch()
+    ok = batch.write("/tmp/ok.jpg", ["-IPTC:Caption-Abstract=line1\nline2"])
+    assert ok is False
+
+
 def test_exiftool_batch_does_not_false_positive_on_caption_with_error(monkeypatch):
     """Tag values containing 'error' must not cause read_json to return {}."""
     from modules import metadata_writer
