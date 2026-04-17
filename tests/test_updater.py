@@ -13,13 +13,29 @@ def test_build_trampoline_script_substitutes_paths(tmp_path):
         current_app=Path("/Applications/HappyVision.app"),
         pending_app=Path("/tmp/pending/HappyVision.app"),
     )
-    assert "12345" in script
+    assert "PID=12345" in script
     assert "/Applications/HappyVision.app" in script
     assert "/tmp/pending/HappyVision.app" in script
-    # Must wait for parent to exit before moving
+    # 30s poll cap
+    assert "seq 1 60" in script
     assert "kill -0" in script
-    # Must relaunch via /usr/bin/open
-    assert "open" in script
+    # Relaunch via full path
+    assert "/usr/bin/open" in script
+    # Trap-based cleanup + self-destruct
+    assert "trap cleanup EXIT" in script
+    assert 'rm -f "$0"' in script
+
+
+def test_build_trampoline_script_quotes_paths_with_spaces():
+    """Paths containing spaces must be shell-quoted."""
+    script = updater._build_trampoline_script(
+        current_pid=1,
+        current_app=Path("/Applications/Work Stuff/HappyVision.app"),
+        pending_app=Path("/tmp/Pend With Spaces/HappyVision.app"),
+    )
+    # shlex.quote wraps in single quotes
+    assert "'/Applications/Work Stuff/HappyVision.app'" in script
+    assert "'/tmp/Pend With Spaces/HappyVision.app'" in script
 
 
 def test_apply_update_extracts_to_pending_not_current(tmp_path, monkeypatch):
@@ -105,3 +121,90 @@ def test_apply_update_dev_mode_does_not_require_current_app(tmp_path, monkeypatc
 
     pending = tmp_path / "home" / "pending_update" / "HappyVision.app"
     assert pending.exists()
+
+
+def test_restart_app_noop_in_dev_mode(tmp_path, monkeypatch):
+    """restart_app must return cleanly when not frozen."""
+    monkeypatch.setattr(updater.sys, "frozen", False, raising=False)
+    # Must not raise, must not try to read pending_update
+    updater.restart_app()
+
+
+def test_restart_app_raises_if_current_app_invalid(tmp_path, monkeypatch):
+    """If _get_current_app returns something not ending in .app, raise."""
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updater, "_get_current_app", lambda: tmp_path / "NotAnApp")
+    import pytest
+    with pytest.raises(RuntimeError, match="無法定位"):
+        updater.restart_app()
+
+
+def test_restart_app_raises_if_no_pending(tmp_path, monkeypatch):
+    """If pending_update/ has no .app, raise FileNotFoundError."""
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+    fake_app = tmp_path / "CurrentApp.app"
+    fake_app.mkdir()
+    monkeypatch.setattr(updater, "_get_current_app", lambda: fake_app)
+    import pytest
+    with pytest.raises(FileNotFoundError, match="找不到已下載"):
+        updater.restart_app()
+
+
+def test_restart_app_writes_executable_script_and_exits(tmp_path, monkeypatch):
+    """Happy path: writes 0o755 trampoline, Popens it, sys.exits."""
+    import subprocess
+    import zipfile
+
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(tmp_path))
+
+    # Fake current app
+    fake_app = tmp_path / "HappyVision.app"
+    fake_app.mkdir()
+    monkeypatch.setattr(updater, "_get_current_app", lambda: fake_app)
+
+    # Seed a valid pending_update/HappyVision.app
+    pending_app = tmp_path / "pending_update" / "HappyVision.app"
+    pending_app.mkdir(parents=True)
+    (pending_app / "Contents").mkdir()
+
+    popen_calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            popen_calls.append({"args": args, "kwargs": kwargs})
+
+    # Patch subprocess.Popen and sys.exit
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
+
+    exits = []
+    def fake_exit(code=0):
+        exits.append(code)
+        raise SystemExit(code)
+
+    monkeypatch.setattr(updater.sys, "exit", fake_exit)
+
+    import pytest
+    with pytest.raises(SystemExit):
+        updater.restart_app()
+
+    # Verify script written and executable
+    script_path = tmp_path / "update_trampoline.sh"
+    assert script_path.exists()
+    assert script_path.stat().st_mode & 0o777 == 0o755
+    content = script_path.read_text()
+    assert str(fake_app) in content
+    assert str(pending_app) in content
+
+    # Verify Popen invoked with the script and start_new_session
+    assert len(popen_calls) == 1
+    assert popen_calls[0]["args"] == ["/bin/bash", str(script_path)]
+    assert popen_calls[0]["kwargs"].get("start_new_session") is True
+
+    # Verify sys.exit(0) called
+    assert exits == [0]
+
+    # Log file created for trampoline output
+    assert (tmp_path / "update_trampoline.log").exists()

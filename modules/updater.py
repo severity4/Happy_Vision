@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -226,16 +227,25 @@ def _build_trampoline_script(current_pid: int, current_app: Path, pending_app: P
     2. Moves current_app to <current_app>.old.
     3. Moves pending_app into current_app's location.
     4. Relaunches via /usr/bin/open.
-    5. Cleans up .old and the pending_update directory.
-    6. Self-destructs.
+    5. Cleans up .old and the pending_update directory via EXIT trap.
+    6. Self-destructs via EXIT trap.
     """
     return f"""#!/bin/bash
 set -e
 
 PID={current_pid}
-CURRENT={current_app!s}
-PENDING={pending_app!s}
+CURRENT={shlex.quote(str(current_app))}
+PENDING={shlex.quote(str(pending_app))}
 BACKUP="${{CURRENT}}.old"
+PENDING_PARENT={shlex.quote(str(pending_app.parent))}
+
+# Cleanup runs even if later steps fail (e.g. open returns non-zero)
+cleanup() {{
+  rm -rf "$BACKUP"
+  rm -rf "$PENDING_PARENT"
+  rm -f "$0"
+}}
+trap cleanup EXIT
 
 # Wait for current process to exit (poll up to 30s)
 for i in $(seq 1 60); do
@@ -255,13 +265,8 @@ mv "$PENDING" "$CURRENT"
 # Relaunch
 /usr/bin/open "$CURRENT"
 
-# Cleanup — wait a bit so the new app is fully loaded
+# Give the new app a moment to load before cleanup (trap handles the actual rm)
 sleep 2
-rm -rf "$BACKUP"
-rm -rf "$(dirname "$PENDING")"
-
-# Self-destruct
-rm -f "$0"
 """
 
 
@@ -292,11 +297,14 @@ def restart_app():
     script_path.chmod(0o755)
 
     # Start trampoline detached (new session), then exit ourselves so the
-    # trampoline can proceed with the swap.
+    # trampoline can proceed with the swap. Redirect its stdout/stderr to a
+    # log file under the config dir so post-mortem diagnosis is possible.
+    log_path = get_config_dir() / "update_trampoline.log"
+    log_file = open(log_path, "w")
     subprocess.Popen(
         ["/bin/bash", str(script_path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
