@@ -161,8 +161,12 @@ def analyze_photo(
 
     client = _get_client(api_key)
 
-    # Global rate limit (shared by pipeline workers and folder watcher)
-    default_limiter.acquire()
+    # Global rate limit (shared by pipeline workers and folder watcher).
+    # 60s cap lets cancel/shutdown propagate instead of blocking forever if
+    # the token bucket is misconfigured or contended beyond patience.
+    if not default_limiter.acquire(timeout=60):
+        log.warning("Rate limiter timeout for %s — giving up", photo_path)
+        return None
 
     for attempt in range(max_retries):
         try:

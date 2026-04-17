@@ -154,3 +154,32 @@ def test_client_cache_reuses_instance(monkeypatch):
     assert c1 is c2
     assert c1 is not c3
     assert created == ["key-abc", "key-xyz"]
+
+
+def test_analyze_photo_respects_rate_limiter_timeout(tmp_path, monkeypatch):
+    """若 rate_limiter.acquire 回 False (timeout), analyze_photo 必須放棄,
+    不能卡在 API 呼叫上."""
+    from modules import gemini_vision
+    from modules import rate_limiter
+
+    img_path = tmp_path / "test.jpg"
+    _create_test_jpg(img_path)
+
+    monkeypatch.setattr(rate_limiter.default_limiter, "acquire",
+                        lambda timeout=None: False)
+
+    call_count = {"n": 0}
+
+    def fail_if_called(*a, **kw):
+        call_count["n"] += 1
+        raise AssertionError("generate_content should not be reached when rate-limited out")
+
+    with patch("modules.gemini_vision.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.side_effect = fail_if_called
+
+        result = gemini_vision.analyze_photo(str(img_path), api_key="fake", model="lite")
+
+    assert result is None
+    assert call_count["n"] == 0
