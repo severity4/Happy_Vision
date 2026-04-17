@@ -205,7 +205,6 @@ def test_stop_waits_for_in_flight_workers(tmp_path, monkeypatch):
     """stop() must not close the store while workers are still writing."""
     from modules import folder_watcher as fw
     from modules.folder_watcher import FolderWatcher, WatcherCallbacks
-    import threading
     import time
 
     # Seed 3 photos
@@ -313,7 +312,6 @@ def test_watcher_uses_exiftool_batch_and_writes_before_save(tmp_path, monkeypatc
     watcher.enqueue_folder(str(tmp_path))
 
     # Wait until processing settles
-    import time
     for _ in range(50):
         if save_calls:
             break
@@ -325,8 +323,6 @@ def test_watcher_uses_exiftool_batch_and_writes_before_save(tmp_path, monkeypatc
     assert any(c[0] == "batch_init" for c in calls)
     assert any(c[0] == "batch_write" for c in calls)
     assert any(c[0] == "batch_close" for c in calls)
-    # save_result was called AFTER batch_write for the photo
-    write_idx = next(i for i, c in enumerate(calls) if c[0] == "batch_write")
     assert len(save_calls) == 1
 
 
@@ -367,7 +363,6 @@ def test_watcher_metadata_failure_marks_failed_not_completed(tmp_path, monkeypat
     watcher.start(folder=str(tmp_path))
     watcher.enqueue_folder(str(tmp_path))
 
-    import time
     for _ in range(50):
         if errors:
             break
