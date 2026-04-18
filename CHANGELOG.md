@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.6.1 — 2026-04-18 (hotfix)
+
+### Fix · 新版 .app 第一次開出現白畫面
+使用者回報 v0.6.0 .app 雙擊打開是白畫面。Root cause：每次新 build 的 binary 有新的 code signature，macOS Keychain 把它當新 app，`_post_start_init` 中的兩次 Keychain call 會各 block 到 2 秒 timeout（共 4 秒）才放行。在這 4 秒內 Flask 還沒 bind port 8081，而 pywebview 視窗在 t=0 就想載 `http://127.0.0.1:8081/`，連線被拒 → WebKit 顯示白畫面且不 retry。
+
+（v0.5.0 首次 release 時也有這個問題，但後續版本在開發機上都已經 pre-authorize 過 Keychain，沒踩到。v0.6.0 一發到使用者手上就炸了。）
+
+修法：**把 Flask binding 跟 Keychain init 解耦**：
+- `web_ui.py` 的 `_run_flask` 不再 pre-init，直接 `app.run()`
+- 另開一條 `_deferred_init` thread 延遲 1.5 秒後跑 `_post_start_init`（等 pywebview 視窗出來）
+- 主 thread 用 `socket.create_connection` poll port 8081 直到 Flask ready（通常 < 1 秒）才開 pywebview 視窗。10 秒內都沒 ready 就 raise
+
+這樣 pywebview 必然載得到 Flask，Keychain 提示在視窗出來後才彈，不會卡死啟動。
+
 ## v0.6.0 — 2026-04-18
 
 ### Dedup · 連拍去重（省錢大招第一發）

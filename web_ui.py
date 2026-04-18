@@ -185,19 +185,45 @@ def serve_frontend(path):
 if __name__ == "__main__":
     is_frozen = getattr(sys, "frozen", False)
     if is_frozen:
+        import socket
         import threading
         import time
         import webview
 
-        # Start Flask in background thread. Post-start init (Keychain + watcher)
-        # runs inside the thread, with a small delay so pywebview's window is
-        # visible to receive any macOS Keychain permission prompt.
+        # Start Flask immediately — no pre-init blocking. Each new .app build
+        # gets a fresh macOS code signature, so the first Keychain call for
+        # that signature can take up to 4s (2s timeout × 2 calls in
+        # _post_start_init) before Flask would otherwise bind. That blocking
+        # race made pywebview's initial GET to 127.0.0.1:8081 fail with
+        # connection-refused → WebKit shows white screen forever.
+        #
+        # New flow: Flask thread binds the port first. A separate thread runs
+        # _post_start_init later, after the pywebview window has surfaced so
+        # any Keychain permission prompt has somewhere to display.
         def _run_flask():
-            time.sleep(0.8)
-            _post_start_init()
             app.run(host="127.0.0.1", port=8081, debug=False)
 
+        def _deferred_init():
+            time.sleep(1.5)  # let pywebview surface the window
+            _post_start_init()
+
         threading.Thread(target=_run_flask, daemon=True).start()
+        threading.Thread(target=_deferred_init, daemon=True).start()
+
+        # Poll Flask until it's listening (< 1s on normal machine), then open
+        # the window. Fail loudly if Flask never comes up after 10s.
+        def _wait_flask_ready(port: int = 8081, timeout: float = 10.0) -> bool:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                        return True
+                except OSError:
+                    time.sleep(0.1)
+            return False
+
+        if not _wait_flask_ready():
+            raise RuntimeError("Flask did not start within 10s — aborting window open")
 
         webview.create_window(
             f"Happy Vision v{_get_version()}",
