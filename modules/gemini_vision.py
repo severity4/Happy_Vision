@@ -147,13 +147,31 @@ def parse_response(raw_text: str) -> dict | None:
     return data
 
 
+def _extract_usage(response, model_name: str) -> dict:
+    """Pull token counts from response.usage_metadata. Safe to zeros if absent."""
+    meta = getattr(response, "usage_metadata", None)
+    input_tokens = int(getattr(meta, "prompt_token_count", 0) or 0)
+    output_tokens = int(getattr(meta, "candidates_token_count", 0) or 0)
+    total = int(getattr(meta, "total_token_count", 0) or (input_tokens + output_tokens))
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total,
+        "model": model_name,
+    }
+
+
 def analyze_photo(
     photo_path: str,
     api_key: str,
     model: str = "lite",
     max_retries: int = 3,
-) -> dict | None:
-    """Analyze a single photo with Gemini API. Returns parsed result or None on failure."""
+) -> tuple[dict | None, dict | None]:
+    """Analyze a single photo with Gemini API.
+
+    Returns (parsed_result, usage) on success, (None, None) on failure.
+    `usage` is {"input_tokens", "output_tokens", "total_tokens", "model"}.
+    """
     model_name = MODEL_MAP.get(model, MODEL_MAP["lite"])
     photo_bytes = Path(photo_path).read_bytes()
     photo_bytes = resize_for_api(photo_bytes)
@@ -166,7 +184,7 @@ def analyze_photo(
     # the token bucket is misconfigured or contended beyond patience.
     if not default_limiter.acquire(timeout=60):
         log.warning("Rate limiter timeout for %s — giving up", photo_path)
-        return None
+        return None, None
 
     for attempt in range(max_retries):
         try:
@@ -192,10 +210,13 @@ def analyze_photo(
             )
             result = parse_response(response.text)
             if result:
-                log.info("Analyzed %s: %s", Path(photo_path).name, result.get("title", ""))
-                return result
+                usage = _extract_usage(response, model_name)
+                log.info("Analyzed %s: %s (tokens: %d in, %d out)",
+                         Path(photo_path).name, result.get("title", ""),
+                         usage["input_tokens"], usage["output_tokens"])
+                return result, usage
             log.warning("Failed to parse response for %s", photo_path)
-            return None
+            return None, None
 
         except Exception as e:
             error_str = str(e)
@@ -211,7 +232,7 @@ def analyze_photo(
                 time.sleep(wait)
                 continue
             log.error("API error for %s: %s", photo_path, error_str)
-            return None
+            return None, None
 
     log.error("All retries exhausted for %s", photo_path)
-    return None
+    return None, None

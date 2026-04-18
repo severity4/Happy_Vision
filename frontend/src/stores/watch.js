@@ -8,6 +8,7 @@ export const useWatchStore = defineStore('watch', () => {
   const processing = ref(0)
   const completedToday = ref(0)
   const failedToday = ref(0)
+  const costUsdToday = ref(0)
   const recentItems = ref([])
 
   let eventSource = null
@@ -24,6 +25,7 @@ export const useWatchStore = defineStore('watch', () => {
       processing.value = data.processing || 0
       completedToday.value = data.completed_today || 0
       failedToday.value = data.failed_today || 0
+      costUsdToday.value = data.cost_usd_today || 0
     } catch {}
   }
 
@@ -52,12 +54,14 @@ export const useWatchStore = defineStore('watch', () => {
       queueSize.value = data.queue_size
       completedToday.value = data.completed_today
       failedToday.value = data.failed_today
+      if (typeof data.cost_usd_today === 'number') costUsdToday.value = data.cost_usd_today
       fetchRecent()
     })
 
     eventSource.addEventListener('watch_error', (e) => {
       const data = JSON.parse(e.data)
       failedToday.value = data.failed_today
+      if (typeof data.cost_usd_today === 'number') costUsdToday.value = data.cost_usd_today
       fetchRecent()
     })
 
@@ -149,7 +153,7 @@ export const useWatchStore = defineStore('watch', () => {
   }
 
   return {
-    status, folder, queueSize, processing, completedToday, failedToday, recentItems,
+    status, folder, queueSize, processing, completedToday, failedToday, costUsdToday, recentItems,
     sseConnected,
     init, connectSSE, disconnectSSE, fetchStatus, fetchRecent,
     startWatch, pauseWatch, resumeWatch, stopWatch, enqueueFolder,

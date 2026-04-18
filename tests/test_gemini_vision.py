@@ -134,15 +134,22 @@ def test_analyze_photo_calls_gemini(tmp_path):
         "identified_people": [],
         "ocr_text": [],
     })
+    mock_response.usage_metadata.prompt_token_count = 3800
+    mock_response.usage_metadata.candidates_token_count = 410
+    mock_response.usage_metadata.total_token_count = 4210
 
     with patch("modules.gemini_vision.genai") as mock_genai:
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
         mock_client.models.generate_content.return_value = mock_response
 
-        result = analyze_photo(str(img_path), api_key="fake-key", model="lite")
+        result, usage = analyze_photo(str(img_path), api_key="fake-key", model="lite")
 
     assert result["title"] == "Test photo"
+    assert usage["input_tokens"] == 3800
+    assert usage["output_tokens"] == 410
+    assert usage["total_tokens"] == 4210
+    assert usage["model"] == "gemini-2.5-flash-lite"
 
 
 def test_client_cache_reuses_instance(monkeypatch):
@@ -183,6 +190,9 @@ def test_analyze_photo_retries_on_deadline_exceeded(tmp_path, monkeypatch):
     good_response.text = json.dumps({"title": "ok", "description": "", "keywords": [],
                                      "category": "other", "scene_type": "indoor",
                                      "mood": "neutral", "people_count": 0})
+    good_response.usage_metadata.prompt_token_count = 100
+    good_response.usage_metadata.candidates_token_count = 20
+    good_response.usage_metadata.total_token_count = 120
 
     call_sequence = [
         Exception("DEADLINE_EXCEEDED: request timed out"),
@@ -195,11 +205,12 @@ def test_analyze_photo_retries_on_deadline_exceeded(tmp_path, monkeypatch):
         mock_genai.Client.return_value = mock_client
         mock_client.models.generate_content.side_effect = call_sequence
 
-        result = gemini_vision.analyze_photo(str(img_path), api_key="fake",
-                                             model="lite", max_retries=3)
+        result, usage = gemini_vision.analyze_photo(str(img_path), api_key="fake",
+                                                    model="lite", max_retries=3)
 
     assert result is not None
     assert result["title"] == "ok"
+    assert usage["input_tokens"] == 100
 
 
 def test_analyze_photo_does_not_retry_on_permanent_error(tmp_path, monkeypatch):
@@ -225,10 +236,11 @@ def test_analyze_photo_does_not_retry_on_permanent_error(tmp_path, monkeypatch):
         mock_genai.Client.return_value = mock_client
         mock_client.models.generate_content.side_effect = raise_permanent
 
-        result = gemini_vision.analyze_photo(str(img_path), api_key="fake",
-                                             model="lite", max_retries=3)
+        result, usage = gemini_vision.analyze_photo(str(img_path), api_key="fake",
+                                                    model="lite", max_retries=3)
 
     assert result is None
+    assert usage is None
     assert call_count["n"] == 1  # 只試一次, 沒 retry
 
 
@@ -255,7 +267,8 @@ def test_analyze_photo_respects_rate_limiter_timeout(tmp_path, monkeypatch):
         mock_genai.Client.return_value = mock_client
         mock_client.models.generate_content.side_effect = fail_if_called
 
-        result = gemini_vision.analyze_photo(str(img_path), api_key="fake", model="lite")
+        result, usage = gemini_vision.analyze_photo(str(img_path), api_key="fake", model="lite")
 
     assert result is None
+    assert usage is None
     assert call_count["n"] == 0

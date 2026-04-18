@@ -35,18 +35,26 @@ def test_e2e_pipeline_scan_analyze_metadata_csv(tmp_path, monkeypatch):
 
     def fake_analyze(path, **kw):
         analyze_count["n"] += 1
-        return {
-            "title": f"Title {analyze_count['n']}",
-            "description": "A white square.",
-            "keywords": ["test", "white"],
-            "category": "other",
-            "subcategory": "",
-            "scene_type": "studio",
-            "mood": "neutral",
-            "people_count": 0,
-            "identified_people": [],
-            "ocr_text": [],
-        }
+        return (
+            {
+                "title": f"Title {analyze_count['n']}",
+                "description": "A white square.",
+                "keywords": ["test", "white"],
+                "category": "other",
+                "subcategory": "",
+                "scene_type": "studio",
+                "mood": "neutral",
+                "people_count": 0,
+                "identified_people": [],
+                "ocr_text": [],
+            },
+            {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "model": "gemini-2.5-flash-lite",
+            },
+        )
 
     monkeypatch.setattr(pl, "analyze_photo", fake_analyze)
 

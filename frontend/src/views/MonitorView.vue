@@ -67,6 +67,7 @@
         >
           + 加入資料夾
         </button>
+        <a href="/api/export/pdf" class="bg-accent-violet/10 hover:bg-accent-violet/20 border border-accent-violet/30 text-accent-violet font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">PDF 報告</a>
         <a href="/api/export/csv" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">CSV</a>
         <a href="/api/export/json" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">JSON</a>
         <a href="/api/export/diagnostics" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">診斷</a>
@@ -126,8 +127,8 @@
       </div>
     </section>
 
-    <!-- 4 STAT GAUGE TILES -->
-    <section class="grid grid-cols-4 gap-3">
+    <!-- 5 STAT GAUGE TILES -->
+    <section class="grid grid-cols-5 gap-3">
       <div class="border border-border-default bg-surface-1 rounded-md p-3">
         <div class="flex items-center justify-between">
           <span class="kicker">QUEUE · 等待</span>
@@ -167,6 +168,14 @@
         <div class="h-0.5 bg-surface-3 mt-2 rounded overflow-hidden">
           <div class="h-full bg-error transition-all duration-500" :style="{ width: failRatio + '%' }"></div>
         </div>
+      </div>
+      <div class="border border-border-default bg-surface-1 rounded-md p-3">
+        <div class="flex items-center justify-between">
+          <span class="kicker">COST · 今日花費</span>
+          <span class="led" :class="watchStore.costUsdToday > 0 ? 'led-accent' : ''"></span>
+        </div>
+        <div class="font-mono text-2xl font-semibold mt-1" :class="watchStore.costUsdToday > 0 ? 'text-accent-violet' : 'text-text-primary'">{{ formatUsd(watchStore.costUsdToday) }}</div>
+        <div class="font-mono text-[10px] text-text-tertiary mt-1">≈ NT${{ formatTwdShort(watchStore.costUsdToday) }}</div>
       </div>
     </section>
 
@@ -285,6 +294,31 @@
                   </div>
                 </div>
 
+                <!-- Usage / cost -->
+                <div v-if="detailData._usage" class="border border-accent-violet/20 bg-accent-violet/[0.04] rounded p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="kicker" style="color: var(--color-accent-violet)">USAGE · 用量與花費</span>
+                    <span class="font-mono text-[10px] text-text-tertiary">{{ detailData._usage.model || '—' }}</span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-3">
+                    <div>
+                      <p class="kicker">INPUT</p>
+                      <p class="font-mono text-sm text-text-primary mt-0.5">{{ (detailData._usage.input_tokens || 0).toLocaleString() }}</p>
+                      <p class="font-mono text-[10px] text-text-tertiary">tokens</p>
+                    </div>
+                    <div>
+                      <p class="kicker">OUTPUT</p>
+                      <p class="font-mono text-sm text-text-primary mt-0.5">{{ (detailData._usage.output_tokens || 0).toLocaleString() }}</p>
+                      <p class="font-mono text-[10px] text-text-tertiary">tokens</p>
+                    </div>
+                    <div>
+                      <p class="kicker">COST</p>
+                      <p class="font-mono text-sm text-accent-violet mt-0.5">{{ formatUsdFine(detailData._usage.cost_usd) }}</p>
+                      <p class="font-mono text-[10px] text-text-tertiary">≈ NT${{ formatTwdShort(detailData._usage.cost_usd) }}</p>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Identified people -->
                 <div v-if="detailData.identified_people?.length">
                   <p class="kicker mb-1">辨識出的人物</p>
@@ -378,6 +412,24 @@ const failRatio = computed(() => {
   if (!total) return 0
   return Math.min(100, (watchStore.failedToday / total) * 100)
 })
+
+function formatUsd(v) {
+  if (!v) return '$0.00'
+  if (v >= 1) return `$${v.toFixed(2)}`
+  return `$${v.toFixed(4)}`
+}
+
+function formatTwdShort(v) {
+  const twd = (v || 0) * 32
+  if (twd >= 1) return `${Math.round(twd).toLocaleString()}`
+  return twd.toFixed(1)
+}
+
+function formatUsdFine(v) {
+  if (!v) return '$0.0000'
+  if (v >= 1) return `$${v.toFixed(4)}`
+  return `$${v.toFixed(6)}`
+}
 
 function relativePath(fullPath) {
   const base = displayFolder.value

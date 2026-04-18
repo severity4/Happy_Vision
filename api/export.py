@@ -1,14 +1,17 @@
 """api/export.py — Report download"""
 
+import io
 import json
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from flask import Blueprint, send_file
 
 from modules.config import get_config_dir, load_config
 from modules.event_store import EventStore
+from modules.pdf_report import generate_report as generate_pdf
 from modules.result_store import ResultStore
 from modules.report_generator import generate_csv, generate_json
 
@@ -17,6 +20,26 @@ export_bp = Blueprint("export", __name__, url_prefix="/api/export")
 
 @export_bp.route("/<fmt>")
 def export_report(fmt):
+    if fmt == "pdf":
+        # PDF uses the richer get_results_for_folder shape (includes _usage)
+        config = load_config()
+        folder = config.get("watch_folder") or ""
+        with ResultStore() as store:
+            if folder:
+                results = store.get_results_for_folder(folder)
+            else:
+                results = store.get_all_results()
+        if not results:
+            return {"error": "No results to export"}, 404
+        pdf_bytes = generate_pdf(results, folder=folder or None)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M")
+        return send_file(
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"happy_vision_report_{stamp}.pdf",
+        )
+
     with ResultStore() as store:
         results = store.get_all_results()
 

@@ -55,16 +55,46 @@ class ResultStore:
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_status ON results(status)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_updated_at ON results(updated_at DESC)")
+        # Additive migrations — silently skip columns that already exist.
+        for col, coltype in [
+            ("input_tokens", "INTEGER"),
+            ("output_tokens", "INTEGER"),
+            ("total_tokens", "INTEGER"),
+            ("cost_usd", "REAL"),
+            ("model", "TEXT"),
+        ]:
+            try:
+                self.conn.execute(f"ALTER TABLE results ADD COLUMN {col} {coltype}")
+            except sqlite3.OperationalError:
+                pass
         self.conn.commit()
 
-    def save_result(self, file_path: str, result: dict) -> None:
+    def save_result(
+        self,
+        file_path: str,
+        result: dict,
+        usage: dict | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
         now = datetime.now().isoformat()
+        usage = usage or {}
         with self._lock:
             self.conn.execute(
                 """INSERT OR REPLACE INTO results
-                   (file_path, status, result_json, created_at, updated_at)
-                   VALUES (?, 'completed', ?, ?, ?)""",
-                (file_path, json.dumps(result, ensure_ascii=False), now, now),
+                   (file_path, status, result_json, input_tokens, output_tokens,
+                    total_tokens, cost_usd, model, created_at, updated_at)
+                   VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    file_path,
+                    json.dumps(result, ensure_ascii=False),
+                    usage.get("input_tokens"),
+                    usage.get("output_tokens"),
+                    usage.get("total_tokens"),
+                    cost_usd,
+                    usage.get("model"),
+                    now,
+                    now,
+                ),
             )
             self.conn.commit()
 
@@ -76,6 +106,31 @@ class ResultStore:
         if row and row["result_json"]:
             return json.loads(row["result_json"])
         return None
+
+    def get_result_with_usage(self, file_path: str) -> dict | None:
+        """Same as get_result but augments the dict with a `_usage` sub-object.
+
+        `_usage` = {input_tokens, output_tokens, total_tokens, cost_usd, model}
+        Absent for rows saved before the tokens migration (pre-v0.5.0).
+        """
+        row = self.conn.execute(
+            """SELECT result_json, input_tokens, output_tokens, total_tokens,
+                      cost_usd, model
+               FROM results WHERE file_path = ? AND status = 'completed'""",
+            (file_path,),
+        ).fetchone()
+        if not row or not row["result_json"]:
+            return None
+        data = json.loads(row["result_json"])
+        if row["total_tokens"] is not None or row["cost_usd"] is not None:
+            data["_usage"] = {
+                "input_tokens": row["input_tokens"] or 0,
+                "output_tokens": row["output_tokens"] or 0,
+                "total_tokens": row["total_tokens"] or 0,
+                "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else 0.0,
+                "model": row["model"] or "",
+            }
+        return data
 
     def is_processed(self, file_path: str) -> bool:
         row = self.conn.execute(
@@ -123,18 +178,20 @@ class ResultStore:
         return [dict(row) for row in rows]
 
     def get_today_stats(self) -> dict:
-        """Get today's completed and failed counts."""
+        """Get today's completed/failed counts and total USD cost."""
         today = datetime.now().strftime("%Y-%m-%d")
         row = self.conn.execute(
             "SELECT "
             "SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as completed, "
-            "SUM(CASE WHEN status = 'failed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as failed "
+            "SUM(CASE WHEN status = 'failed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as failed, "
+            "COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN cost_usd ELSE 0 END), 0) as cost "
             "FROM results",
-            (today + "%", today + "%"),
+            (today + "%", today + "%", today + "%"),
         ).fetchone()
         return {
             "completed_today": row["completed"] or 0,
             "failed_today": row["failed"] or 0,
+            "cost_usd_today": float(row["cost"] or 0.0),
         }
 
     def get_summary(self) -> dict:
@@ -170,14 +227,25 @@ class ResultStore:
         raw = str(Path(folder))
         resolved = str(Path(folder).resolve())
         rows = self.conn.execute(
-            "SELECT file_path, result_json FROM results "
-            "WHERE status = 'completed' AND (file_path LIKE ? OR file_path LIKE ?)",
+            """SELECT file_path, result_json, input_tokens, output_tokens,
+                      total_tokens, cost_usd, model, updated_at
+               FROM results
+               WHERE status = 'completed' AND (file_path LIKE ? OR file_path LIKE ?)""",
             (raw + "%", resolved + "%"),
         ).fetchall()
         results = []
         for row in rows:
             data = json.loads(row["result_json"])
             data["file_path"] = row["file_path"]
+            data["updated_at"] = row["updated_at"]
+            if row["total_tokens"] is not None or row["cost_usd"] is not None:
+                data["_usage"] = {
+                    "input_tokens": row["input_tokens"] or 0,
+                    "output_tokens": row["output_tokens"] or 0,
+                    "total_tokens": row["total_tokens"] or 0,
+                    "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else 0.0,
+                    "model": row["model"] or "",
+                }
             results.append(data)
         return results
 

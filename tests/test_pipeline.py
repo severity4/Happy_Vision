@@ -47,7 +47,8 @@ def test_pipeline_callbacks_called(tmp_path):
     progress_calls = []
     callbacks.on_progress = lambda done, total, path: progress_calls.append((done, total, path))
 
-    with patch("modules.pipeline.analyze_photo", return_value=mock_result):
+    mock_usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
+    with patch("modules.pipeline.analyze_photo", return_value=(mock_result, mock_usage)):
         results = run_pipeline(
             folder=str(tmp_path),
             api_key="fake-key",
@@ -76,10 +77,11 @@ def test_pipeline_skips_processed(tmp_path):
     store.close()
 
     analyze_calls = []
+    mock_usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
 
     def mock_analyze(path, **kwargs):
         analyze_calls.append(path)
-        return mock_result
+        return mock_result, mock_usage
 
     with patch("modules.pipeline.analyze_photo", side_effect=mock_analyze):
         run_pipeline(
@@ -103,11 +105,12 @@ def test_pipeline_writes_metadata_per_photo(tmp_path, monkeypatch):
     for i in range(3):
         (tmp_path / f"p{i}.jpg").write_bytes(b"\xff\xd8\xff\xd9")  # minimal JPEG
 
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         pl, "analyze_photo",
-        lambda path, **kw: {"title": f"T-{Path(path).name}", "keywords": ["k"],
-                            "description": "d", "category": "other",
-                            "scene_type": "indoor", "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": f"T-{Path(path).name}", "keywords": ["k"],
+                             "description": "d", "category": "other",
+                             "scene_type": "indoor", "mood": "neutral", "people_count": 0}, _usage),
     )
 
     writes = []
@@ -145,13 +148,15 @@ def test_pipeline_cancel_stops_metadata_writes(tmp_path, monkeypatch):
     state = pl.PipelineState()
     call_count = {"n": 0}
 
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
+
     def fake_analyze(path, **kw):
         call_count["n"] += 1
         if call_count["n"] == 2:
             state.cancel()
-        return {"title": "T", "keywords": [], "description": "",
-                "category": "other", "scene_type": "indoor",
-                "mood": "neutral", "people_count": 0}
+        return ({"title": "T", "keywords": [], "description": "",
+                 "category": "other", "scene_type": "indoor",
+                 "mood": "neutral", "people_count": 0}, _usage)
 
     monkeypatch.setattr(pl, "analyze_photo", fake_analyze)
 
@@ -184,11 +189,12 @@ def test_pipeline_metadata_failure_marks_failed(tmp_path, monkeypatch):
 
     (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
 
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         pl, "analyze_photo",
-        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
-                            "category": "other", "scene_type": "indoor",
-                            "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0}, _usage),
     )
 
     class FailingBatch:
@@ -223,11 +229,12 @@ def test_pipeline_does_not_create_batch_when_metadata_disabled(tmp_path, monkeyp
 
     (tmp_path / "p.jpg").write_bytes(b"\xff\xd8\xff\xd9")
 
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         pl, "analyze_photo",
-        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
-                            "category": "other", "scene_type": "indoor",
-                            "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0}, _usage),
     )
 
     instantiated = {"n": 0}
@@ -269,13 +276,15 @@ def test_pipeline_respects_rate_limiter(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rate_limiter.default_limiter, "acquire", tracking_acquire)
 
-    monkeypatch.setattr(
-        pl, "analyze_photo",
-        lambda path, **kw: (rate_limiter.default_limiter.acquire(),
-                            {"title": "T", "keywords": [], "description": "",
-                             "category": "other", "scene_type": "indoor",
-                             "mood": "neutral", "people_count": 0})[1],
-    )
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
+
+    def _tracked(path, **kw):
+        rate_limiter.default_limiter.acquire()
+        return ({"title": "T", "keywords": [], "description": "",
+                 "category": "other", "scene_type": "indoor",
+                 "mood": "neutral", "people_count": 0}, _usage)
+
+    monkeypatch.setattr(pl, "analyze_photo", _tracked)
 
     class FakeBatch:
         def write(self, p, a): return True

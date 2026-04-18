@@ -19,7 +19,7 @@ def get_results():
 @results_bp.route("/<path:file_path>", methods=["GET"])
 def get_result(file_path):
     with ResultStore() as store:
-        result = store.get_result(f"/{file_path}")
+        result = store.get_result_with_usage(f"/{file_path}")
     if result is None:
         return jsonify({"error": "Result not found"}), 404
     result["file_path"] = f"/{file_path}"

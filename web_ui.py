@@ -69,18 +69,27 @@ app.register_blueprint(watch_bp)
 app.register_blueprint(update_bp)
 app.register_blueprint(system_bp)
 
-# Register allowed roots before starting watcher
-from modules.config import load_config  # noqa: E402
-_cfg = load_config()
-if _cfg.get("watch_folder"):
-    register_allowed_root(_cfg["watch_folder"])
 
-# Auto-start watch folder if previously enabled.
-# In dev (debug=True) Werkzeug's reloader forks: parent has no WERKZEUG_RUN_MAIN;
-# child has it set to "true". Only start in child.
-# In production (frozen .app) debug is False and there's no reloader.
-if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-    auto_start_watcher()
+def _post_start_init() -> None:
+    """Deferred initialization that touches Keychain + config.
+
+    At module-import time in a frozen --windowed .app this deadlocks: macOS
+    Keychain wants to show a permission prompt for a new binary signature,
+    but no GUI is up yet to display it. We run this after pywebview has
+    surfaced its window (bundled path) or immediately (dev). secret_store
+    also caps each Keychain call with a 2s timeout as a belt-and-braces."""
+    from modules.config import load_config
+    cfg = load_config()
+    if cfg.get("watch_folder"):
+        register_allowed_root(cfg["watch_folder"])
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        try:
+            auto_start_watcher()
+        except Exception:
+            # Don't kill app start-up if the watcher can't spin up (bad folder,
+            # keychain still not authorised, etc). User can retry from Settings.
+            import logging
+            logging.getLogger(__name__).exception("auto_start_watcher failed")
 
 
 def _get_version() -> str:
@@ -173,15 +182,19 @@ if __name__ == "__main__":
     is_frozen = getattr(sys, "frozen", False)
     if is_frozen:
         import threading
+        import time
         import webview
 
-        # Start Flask in background thread
-        threading.Thread(
-            target=lambda: app.run(host="127.0.0.1", port=8081, debug=False),
-            daemon=True,
-        ).start()
+        # Start Flask in background thread. Post-start init (Keychain + watcher)
+        # runs inside the thread, with a small delay so pywebview's window is
+        # visible to receive any macOS Keychain permission prompt.
+        def _run_flask():
+            time.sleep(0.8)
+            _post_start_init()
+            app.run(host="127.0.0.1", port=8081, debug=False)
 
-        # Open native window
+        threading.Thread(target=_run_flask, daemon=True).start()
+
         webview.create_window(
             f"Happy Vision v{_get_version()}",
             "http://127.0.0.1:8081",
@@ -191,4 +204,5 @@ if __name__ == "__main__":
         )
         webview.start()
     else:
+        _post_start_init()
         app.run(host="127.0.0.1", port=8081, debug=True)

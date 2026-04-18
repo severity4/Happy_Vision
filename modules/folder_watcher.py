@@ -10,6 +10,7 @@ from pathlib import Path
 from modules.config import load_config, save_config
 from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
+from modules.pricing import calc_cost_usd
 from modules.logger import setup_logger
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args, has_happy_vision_tag
 from modules.result_store import ResultStore
@@ -366,8 +367,16 @@ class FolderWatcher:
             model = config.get("model", "lite")
 
             analysis_started = time.perf_counter()
-            result = analyze_photo(photo_path, api_key=api_key, model=model)
+            result, usage = analyze_photo(photo_path, api_key=api_key, model=model)
             analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
+
+            cost_usd = None
+            if usage:
+                cost_usd = calc_cost_usd(
+                    usage.get("model", ""),
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
 
             if not result:
                 if self._store:
@@ -407,13 +416,19 @@ class FolderWatcher:
                 metadata_ms = None
 
             if self._store:
-                self._store.save_result(photo_path, result)
+                self._store.save_result(photo_path, result, usage=usage, cost_usd=cost_usd)
             if self._events is not None:
                 self._events.add_event(
                     "watch_photo_completed",
                     folder=self._folder,
                     file_path=photo_path,
-                    details={"analyze_ms": analyze_ms, "metadata_write_ms": metadata_ms},
+                    details={
+                        "analyze_ms": analyze_ms,
+                        "metadata_write_ms": metadata_ms,
+                        "input_tokens": usage.get("input_tokens") if usage else None,
+                        "output_tokens": usage.get("output_tokens") if usage else None,
+                        "cost_usd": cost_usd,
+                    },
                 )
             log.info("Processed: %s", photo_path)
             self._callbacks.on_processed(photo_path, self._queue.qsize())

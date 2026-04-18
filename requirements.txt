@@ -6,3 +6,4 @@ tqdm>=4.66
 Pillow>=10.0
 pywebview>=6.0
 keyring>=24
+reportlab>=4.0

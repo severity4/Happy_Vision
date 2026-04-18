@@ -38,8 +38,9 @@ def test_cli_runs_pipeline(tmp_path, monkeypatch):
     (tmp_path / "photos" / "test.jpg").write_bytes(b"\xff\xd8")
 
     mock_result = {"title": "Test", "keywords": ["test"]}
+    mock_usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
 
-    with patch("modules.pipeline.analyze_photo", return_value=mock_result):
+    with patch("modules.pipeline.analyze_photo", return_value=(mock_result, mock_usage)):
         runner = CliRunner()
         result = runner.invoke(main, [
             str(tmp_path / "photos"),

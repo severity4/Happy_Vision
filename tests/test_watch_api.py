@@ -166,7 +166,7 @@ def test_enqueue_autostarts_watcher_when_stopped(client, tmp_path):
         }):
             with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
                 with patch("modules.folder_watcher.file_size_stable", return_value=True):
-                    with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
+                    with patch("modules.folder_watcher.analyze_photo", return_value=({"title": "t"}, {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"})):
                         fake_batch = MagicMock()
                         fake_batch.write.return_value = True
                         with patch("modules.folder_watcher.ExiftoolBatch", return_value=fake_batch):
@@ -203,7 +203,7 @@ def test_enqueue_returns_counts(client, tmp_path):
         }):
             with patch("modules.folder_watcher.has_happy_vision_tag", return_value=False):
                 with patch("modules.folder_watcher.file_size_stable", return_value=True):
-                    with patch("modules.folder_watcher.analyze_photo", return_value={"title": "t"}):
+                    with patch("modules.folder_watcher.analyze_photo", return_value=({"title": "t"}, {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"})):
                         fake_batch = MagicMock()
                         fake_batch.write.return_value = True
                         with patch("modules.folder_watcher.ExiftoolBatch", return_value=fake_batch):

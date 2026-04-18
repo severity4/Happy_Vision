@@ -8,6 +8,7 @@ from pathlib import Path
 from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args
+from modules.pricing import calc_cost_usd
 from modules.result_store import ResultStore
 from modules.logger import setup_logger
 
@@ -132,8 +133,16 @@ def run_pipeline(
             return None
 
         analysis_started = time.perf_counter()
-        result = analyze_photo(photo_path, api_key=api_key, model=model)
+        result, usage = analyze_photo(photo_path, api_key=api_key, model=model)
         analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
+
+        cost_usd = None
+        if usage:
+            cost_usd = calc_cost_usd(
+                usage.get("model", ""),
+                usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0),
+            )
 
         # Write metadata before saving as 'completed' so that a successful
         # save_result guarantees the photo has the IPTC marker on disk.
@@ -147,7 +156,7 @@ def run_pipeline(
 
         with lock:
             if result:
-                store.save_result(photo_path, result)
+                store.save_result(photo_path, result, usage=usage, cost_usd=cost_usd)
                 results.append(result)
                 events.add_event(
                     "analysis_photo_completed",

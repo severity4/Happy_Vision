@@ -241,9 +241,11 @@ def test_stop_waits_for_in_flight_workers(tmp_path, monkeypatch):
         enter.set()
         # Block until test releases us
         proceed.wait(timeout=5)
-        return {"title": "T", "keywords": [], "description": "",
-                "category": "other", "scene_type": "indoor",
-                "mood": "neutral", "people_count": 0}
+        return ({"title": "T", "keywords": [], "description": "",
+                 "category": "other", "scene_type": "indoor",
+                 "mood": "neutral", "people_count": 0},
+                {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                 "model": "gemini-2.5-flash-lite"})
 
     monkeypatch.setattr(fw, "analyze_photo", slow_analyze)
     monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
@@ -305,11 +307,12 @@ def test_watcher_uses_exiftool_batch_and_writes_before_save(tmp_path, monkeypatc
             calls.append(("batch_close",))
 
     monkeypatch.setattr(fw, "ExiftoolBatch", SpyBatch)
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         fw, "analyze_photo",
-        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
-                            "category": "other", "scene_type": "indoor",
-                            "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0}, _usage),
     )
     monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
     monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
@@ -323,9 +326,9 @@ def test_watcher_uses_exiftool_batch_and_writes_before_save(tmp_path, monkeypatc
     # Spy on save_result
     save_calls = []
     orig_save = fw.ResultStore.save_result
-    def track_save(self, path, data):
+    def track_save(self, path, data, *args, **kwargs):
         save_calls.append(path)
-        orig_save(self, path, data)
+        orig_save(self, path, data, *args, **kwargs)
     monkeypatch.setattr(fw.ResultStore, "save_result", track_save)
 
     watcher = FolderWatcher(WatcherCallbacks())
@@ -361,11 +364,12 @@ def test_watcher_metadata_failure_marks_failed_not_completed(tmp_path, monkeypat
         def close(self): pass
 
     monkeypatch.setattr(fw, "ExiftoolBatch", FailingBatch)
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         fw, "analyze_photo",
-        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
-                            "category": "other", "scene_type": "indoor",
-                            "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0}, _usage),
     )
     monkeypatch.setattr(fw, "has_happy_vision_tag", lambda p: False)
     monkeypatch.setattr(fw, "file_size_stable", lambda p, **kw: True)
@@ -516,11 +520,12 @@ def test_process_one_clears_inflight_path_after_completion(tmp_path, monkeypatch
     photo = tmp_path / "p.jpg"
     photo.write_bytes(b"\xff\xd8\xff\xd9")
 
+    _usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "gemini-2.5-flash-lite"}
     monkeypatch.setattr(
         fw, "analyze_photo",
-        lambda path, **kw: {"title": "T", "keywords": [], "description": "",
-                            "category": "other", "scene_type": "indoor",
-                            "mood": "neutral", "people_count": 0},
+        lambda path, **kw: ({"title": "T", "keywords": [], "description": "",
+                             "category": "other", "scene_type": "indoor",
+                             "mood": "neutral", "people_count": 0}, _usage),
     )
     monkeypatch.setattr(fw, "load_config",
                         lambda: {"gemini_api_key": "k", "watch_concurrency": 1,

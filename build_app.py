@@ -60,6 +60,13 @@ def build_app():
     if exiftool_lib.exists():
         added_data.append(f"{exiftool_lib}:lib")
 
+    # Bundle CJK font for PDF reports (Noto Sans TC)
+    font_path = PROJECT_DIR / "assets" / "NotoSansTC-Regular.ttf"
+    if font_path.exists():
+        added_data.append(f"{font_path}:assets")
+    else:
+        print(f"WARNING: {font_path} not found — PDF exports will fail at runtime.")
+
     print(f"\nBuilding {APP_NAME}.app...")
     print(f"Data files: {added_data}")
 
@@ -88,6 +95,9 @@ def build_app():
         "--hidden-import=modules.metadata_writer",
         "--hidden-import=modules.report_generator",
         "--hidden-import=modules.pipeline",
+        "--hidden-import=modules.pricing",
+        "--hidden-import=modules.pdf_report",
+        "--hidden-import=reportlab.pdfbase.cidfonts",
         "--hidden-import=api",
         "--hidden-import=api.settings",
         "--hidden-import=api.analysis",
