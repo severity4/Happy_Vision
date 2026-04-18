@@ -1,50 +1,75 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface-0: #0a0a0f;
-  --color-surface-1: #12121a;
-  --color-surface-2: #1a1a26;
-  --color-surface-3: #242433;
-  --color-surface-4: #2e2e40;
+  /* Surfaces — dark console palette (B-1 Terminal Dense) */
+  --color-surface-0: #08090c;
+  --color-surface-1: #0f1116;
+  --color-surface-2: #14171f;
+  --color-surface-3: #1e2230;
+  --color-surface-4: #2a2f42;
 
+  /* Borders */
   --color-border-subtle: #ffffff0a;
-  --color-border-default: #ffffff14;
-  --color-border-strong: #ffffff22;
+  --color-border-default: #1e2230;
+  --color-border-strong: #2a2f42;
 
-  --color-text-primary: #ededf0;
-  --color-text-secondary: #8b8b9e;
-  --color-text-tertiary: #5e5e73;
+  /* Text */
+  --color-text-primary: #e4e7f0;
+  --color-text-secondary: #9aa2b8;
+  --color-text-tertiary: #5a6078;
+  --color-text-mute: #3d4358;
 
-  --color-accent-violet: #8b5cf6;
-  --color-accent-violet-dim: #7c3aed;
-  --color-accent-violet-glow: #8b5cf620;
-  --color-accent-violet-subtle: #8b5cf610;
+  /* Accent — brighter violet */
+  --color-accent-violet: #9b7bff;
+  --color-accent-violet-dim: #7c5fff;
+  --color-accent-violet-glow: #9b7bff33;
+  --color-accent-violet-subtle: #9b7bff14;
 
-  --color-success: #34d399;
-  --color-warning: #fbbf24;
-  --color-error: #f87171;
+  /* Functional (LED semantics) */
+  --color-success: #3ddc84;
+  --color-warning: #ffb020;
+  --color-error: #ff5a5a;
+  --color-cyan: #5adce6;
+
+  /* Typography */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 }
 
 body {
   background-color: var(--color-surface-0);
   color: var(--color-text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Smooth scrollbar for dark theme */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-surface-4);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-surface-4); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-tertiary); }
+
+/* Status LED — 6px dot with optional glow + pulse */
+.led {
+  width: 6px; height: 6px;
+  border-radius: 999px;
+  display: inline-block;
   background: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+.led-ok     { background: var(--color-success);        box-shadow: 0 0 6px color-mix(in srgb, var(--color-success)        55%, transparent); }
+.led-warn   { background: var(--color-warning);        box-shadow: 0 0 6px color-mix(in srgb, var(--color-warning)        55%, transparent); }
+.led-accent { background: var(--color-accent-violet);  box-shadow: 0 0 6px color-mix(in srgb, var(--color-accent-violet)  55%, transparent); }
+.led-error  { background: var(--color-error);          box-shadow: 0 0 6px color-mix(in srgb, var(--color-error)          55%, transparent); }
+.led-pulse  { animation: led-pulse 1.4s ease-in-out infinite; }
+@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Kicker — ALL-CAPS micro label with wide tracking */
+.kicker {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  font-weight: 500;
 }
