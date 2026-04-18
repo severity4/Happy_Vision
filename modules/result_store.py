@@ -1,13 +1,15 @@
 """modules/result_store.py — SQLite result storage with checkpoint/resume"""
 
 import json
+import logging
 import sqlite3
 import threading
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
 from modules.config import get_config_dir
+
+log = logging.getLogger(__name__)
 
 
 class ResultStore:
@@ -20,10 +22,23 @@ class ResultStore:
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self._init_db()
-        except sqlite3.Error:
-            fallback_dir = Path(tempfile.gettempdir()) / "happy-vision"
+        except sqlite3.Error as e:
+            # Primary location failed. Close whatever connection we opened
+            # before falling back — else we leak an fd + risk partial state.
+            try:
+                self.conn.close()
+            except Exception:  # noqa: BLE001 — close must not mask the original failure
+                pass
+            # Durable fallback inside the user's home so data survives reboot.
+            # /tmp would silently discard results — never use that here.
+            fallback_dir = Path.home() / ".happy-vision-fallback"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             self.db_path = fallback_dir / Path(db_path).name
+            log.error(
+                "Primary DB path unusable (%s). Falling back to %s. "
+                "Analysis results will save there instead — inspect the cause.",
+                e, self.db_path,
+            )
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self._init_db()
@@ -34,9 +49,14 @@ class ResultStore:
             test_conn = sqlite3.connect(str(path))
             test_conn.close()
             return path
-        except sqlite3.Error:
-            fallback_dir = Path(tempfile.gettempdir()) / "happy-vision"
+        except sqlite3.Error as e:
+            # Same durable fallback as __init__ — never /tmp.
+            fallback_dir = Path.home() / ".happy-vision-fallback"
             fallback_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "Cannot write DB at %s (%s). Falling back to %s",
+                path, e, fallback_dir,
+            )
             return fallback_dir / path.name
 
     def _init_db(self):
@@ -114,15 +134,18 @@ class ResultStore:
                      limit: int = 5000) -> dict | None:
         """Find the closest completed result by pHash Hamming distance.
 
-        Scans recent completed rows (up to `limit`) with a non-null phash
-        and returns {file_path, phash, result (dict), distance} for the best
-        match within `threshold` bits, or None if nothing is close enough.
-        Returns the master row (one without duplicate_of set) so dup chains
-        don't spiral — if a near-match is itself a duplicate, we follow its
-        pointer back to the master."""
+        Returns {file_path, phash, result (dict), distance} for the best
+        match within `threshold` bits, resolved to the underlying master row
+        (so dup chains don't compound). Returns None if nothing is close.
+
+        Performance: the candidate scan selects only (file_path, phash) —
+        the result_json column can be 1-3 KB per row and fetching it for
+        every candidate amplifies I/O by ~100x on big DBs. We only load
+        the master's JSON after we've picked a match.
+        """
         from modules.phash import find_closest
         rows = self.conn.execute(
-            """SELECT file_path, phash, result_json, duplicate_of
+            """SELECT file_path, phash
                FROM results
                WHERE status = 'completed' AND phash IS NOT NULL
                ORDER BY updated_at DESC LIMIT ?""",
@@ -132,22 +155,33 @@ class ResultStore:
         match = find_closest(target_phash, candidates, threshold)
         if match is None:
             return None
-        match_path, match_hash, distance = match
-        # Follow duplicate_of to the master to avoid duplicate-of-duplicate chains
+        match_path, _match_hash, distance = match
+
+        # Resolve to the underlying master. match_path itself might be a
+        # duplicate row; follow duplicate_of until we hit a row with no
+        # duplicate_of set. Cap hops defensively (chain should be depth 1).
         master_path = match_path
-        for _ in range(3):  # cap hops
+        row = None
+        for _ in range(4):
             row = self.conn.execute(
-                "SELECT file_path, phash, result_json, duplicate_of "
-                "FROM results WHERE file_path = ? AND status = 'completed'",
+                """SELECT file_path, phash, result_json, duplicate_of
+                   FROM results WHERE file_path = ? AND status = 'completed'""",
                 (master_path,),
             ).fetchone()
             if row is None:
                 return None
             if not row["duplicate_of"]:
-                break
+                break  # found the master
             master_path = row["duplicate_of"]
         else:
+            # Chain too deep (4+ hops) — don't trust it, bail to a fresh
+            # Gemini call rather than compound the corruption.
+            log.warning(
+                "dedup chain for %s > 4 hops deep — skipping dedup",
+                target_phash,
+            )
             return None
+
         return {
             "file_path": row["file_path"],
             "phash": row["phash"],

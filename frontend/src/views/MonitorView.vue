@@ -31,6 +31,7 @@
           v-if="watchStore.status === 'stopped'"
           @click="onStartWatch"
           :disabled="!configuredFolder || !hasApiKey"
+          :title="startWatchTooltip"
           class="bg-accent-violet hover:bg-accent-violet-dim disabled:opacity-25 disabled:cursor-not-allowed text-white font-mono text-[11px] tracking-wider px-4 py-1.5 rounded transition-colors"
         >
           ▶ 開始監控
@@ -63,6 +64,7 @@
         <button
           @click="openBrowser"
           :disabled="!hasApiKey"
+          :title="!hasApiKey ? '請先到設定頁填寫 Gemini API Key' : '瀏覽資料夾並加入佇列分析'"
           class="bg-surface-2 hover:bg-surface-3 disabled:opacity-25 disabled:cursor-not-allowed text-text-primary border border-border-default hover:border-accent-violet/40 font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors"
         >
           + 加入資料夾
@@ -76,7 +78,7 @@
 
     <!-- Error toast -->
     <div v-if="errorMsg" class="border border-error/30 bg-error/[0.05] rounded-md px-4 py-2">
-      <p class="font-mono text-xs text-error">{{ errorMsg }}</p>
+      <p class="text-xs text-error">{{ humanizeError(errorMsg) }}</p>
     </div>
 
     <!-- Enqueue result toast -->
@@ -222,9 +224,9 @@
             <span class="led" :class="item.status === 'completed' ? 'led-ok' : 'led-error'"></span>
           </div>
           <div class="col-span-7 font-mono text-[12px] text-text-primary truncate">{{ relativePath(item.file_path) }}</div>
-          <div class="col-span-3 font-mono text-[11px] truncate">
-            <span v-if="item.status === 'failed' && item.error_message" class="text-error">{{ item.error_message }}</span>
-            <span v-else class="text-text-tertiary">—</span>
+          <div class="col-span-3 text-[11px] truncate">
+            <span v-if="item.status === 'failed' && item.error_message" class="text-error" :title="item.error_message">{{ humanizeError(item.error_message) }}</span>
+            <span v-else class="text-text-tertiary font-mono">—</span>
           </div>
           <div class="col-span-1 font-mono text-[10px] text-text-tertiary text-right">{{ formatTime(item.updated_at) }}</div>
         </div>
@@ -343,7 +345,8 @@
                 <!-- Error (for failed items) -->
                 <div v-if="selected?.status === 'failed'" class="border border-error/30 bg-error/[0.05] rounded p-3">
                   <p class="kicker mb-1" style="color: var(--color-error)">處理失敗</p>
-                  <p class="font-mono text-xs text-error">{{ selected?.error_message || '(未記錄原因)' }}</p>
+                  <p class="text-xs text-error">{{ humanizeError(selected?.error_message || '(未記錄原因)') }}</p>
+                  <p v-if="selected?.error_message && selected.error_message !== humanizeError(selected.error_message)" class="font-mono text-[10px] text-text-tertiary mt-1 break-all">技術細節：{{ selected.error_message }}</p>
                 </div>
 
                 <!-- File path -->
@@ -368,7 +371,8 @@
                   >✕</button>
                 </div>
                 <div v-if="selected?.error_message" class="border border-error/30 bg-error/[0.05] rounded p-3 mb-4">
-                  <p class="font-mono text-xs text-error">{{ selected.error_message }}</p>
+                  <p class="text-xs text-error">{{ humanizeError(selected.error_message) }}</p>
+                  <p v-if="selected.error_message !== humanizeError(selected.error_message)" class="font-mono text-[10px] text-text-tertiary mt-2 break-all">技術細節：{{ selected.error_message }}</p>
                 </div>
                 <div class="pt-3 border-t border-border-default">
                   <p class="kicker mb-1">檔案路徑</p>
@@ -387,6 +391,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useWatchStore } from '../stores/watch'
 import { useSettingsStore } from '../stores/settings'
+import { humanizeError } from '../utils/errors.js'
 
 const watchStore = useWatchStore()
 const settingsStore = useSettingsStore()
@@ -412,6 +417,12 @@ const displayFolder = computed(() => watchStore.folder || configuredFolder.value
 const browserFolders = computed(() =>
   browserData.value.items.filter(i => i.type === 'folder')
 )
+
+const startWatchTooltip = computed(() => {
+  if (!hasApiKey.value) return '請先到設定頁填寫 Gemini API Key'
+  if (!configuredFolder.value) return '請先到設定頁選擇監控資料夾'
+  return '開始監控（即時分析新進照片）'
+})
 
 // Visual meters — cap at a reasonable ceiling so the bar is readable
 const queueWidth = computed(() => Math.min(100, (watchStore.queueSize / 50) * 100))

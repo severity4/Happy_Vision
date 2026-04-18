@@ -127,12 +127,16 @@
         </transition>
       </router-view>
     </main>
+
+    <!-- Global toast container for save feedback + errors -->
+    <ToastHost />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useWatchStore } from './stores/watch'
+import ToastHost from './components/ToastHost.vue'
 
 const watchStore = useWatchStore()
 

@@ -27,10 +27,15 @@ def _isolate_keychain(monkeypatch):
     """Replace the global _keyring module reference with an in-memory fake so
     tests NEVER touch the developer's real macOS Keychain. This guards the
     config-migration path (tests that write legacy config.json with
-    gemini_api_key trigger secret_store.set_key during load_config)."""
+    gemini_api_key trigger secret_store.set_key during load_config).
+
+    Also invalidates the in-process cache before and after each test, else
+    a test that set a key would poison the next test's get_key."""
     from modules import secret_store
     monkeypatch.setattr(secret_store, "_keyring", _InMemoryKeyring())
+    secret_store.invalidate_cache()
     yield
+    secret_store.invalidate_cache()
 
 
 @pytest.fixture(autouse=True)

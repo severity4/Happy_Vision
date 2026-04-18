@@ -20,6 +20,23 @@ _sse_queues: list[queue.Queue] = []
 _sse_lock = threading.Lock()
 _watcher: FolderWatcher | None = None
 
+# Shared ResultStore for SSE-side stat queries. Previously every broadcast
+# event opened + closed its own connection, which re-ran 6 ALTER TABLE
+# statements each time and added ~10ms × N requests per photo. For a
+# 150k-photo backlog that added 20-25 minutes of pure open/close time.
+# One connection, one ADD COLUMN pass at boot, live updates thereafter.
+_shared_store: ResultStore | None = None
+_shared_store_lock = threading.Lock()
+
+
+def _get_shared_store() -> ResultStore:
+    global _shared_store
+    if _shared_store is None:
+        with _shared_store_lock:
+            if _shared_store is None:
+                _shared_store = ResultStore()
+    return _shared_store
+
 
 def _broadcast_sse(event: str, data: dict):
     msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -36,9 +53,7 @@ def _broadcast_sse(event: str, data: dict):
 
 class WatchSSECallbacks(WatcherCallbacks):
     def on_processed(self, file_path, queue_size):
-        store = ResultStore()
-        stats = store.get_today_stats()
-        store.close()
+        stats = _get_shared_store().get_today_stats()
         _broadcast_sse("watch_progress", {
             "file": file_path,
             "queue_size": queue_size,
@@ -46,9 +61,7 @@ class WatchSSECallbacks(WatcherCallbacks):
         })
 
     def on_error(self, file_path, error):
-        store = ResultStore()
-        stats = store.get_today_stats()
-        store.close()
+        stats = _get_shared_store().get_today_stats()
         _broadcast_sse("watch_error", {
             "file": file_path,
             "error": error,
@@ -157,10 +170,7 @@ def stop_watch():
 @watch_bp.route("/status")
 def watch_status():
     watcher = get_watcher()
-    store = ResultStore()
-    stats = store.get_today_stats()
-    store.close()
-
+    stats = _get_shared_store().get_today_stats()
     return jsonify({
         "status": watcher.state,
         "folder": watcher.folder,
@@ -214,9 +224,7 @@ def watch_events():
 @watch_bp.route("/recent")
 def watch_recent():
     limit = request.args.get("limit", 20, type=int)
-    store = ResultStore()
-    recent = store.get_recent(limit=limit)
-    store.close()
+    recent = _get_shared_store().get_recent(limit=limit)
     return jsonify(recent)
 
 

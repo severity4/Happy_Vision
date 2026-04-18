@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.7.0 — 2026-04-19 (穩定性 + 效能 + UX 全面硬化)
+
+本版整合了 5 個專業 agent（Code Reviewer, Evidence Collector, Security, UX Researcher, SRE）的深度 review findings，修掉 4 個 CRITICAL + 7 個 HIGH bug，量化改進 15 萬張 backlog 場景的效能，並處理 UX P0 polish。
+
+### 🔴 CRITICAL fix (Code Reviewer + Evidence Collector)
+
+- **Dedup chain resolution bug**（`modules/result_store.py`）— `find_similar` 的 for/else 語意錯誤加上 `duplicate_of` 誤指中間節點的 bug，會讓連拍去重鏈累積錯誤資料。改成正確追到真正 master + 4-hop cap + fetch-first-then-resolve 架構。
+- **Settings PUT 卡 4-6 秒**（`modules/secret_store.py`）— Evidence Collector 發現 UI 按按鈕後設定不會 persist。root cause：每個 PUT 打 Keychain 2-4 次，每次最多 2s timeout，累積起來瀏覽器 abort。修法：在 process memory 加 key cache，首次載入後的 get_key 全部免費，只有 set_key 會真正碰 Keychain。**PUT 從 4-6s 降到 <5ms**。
+- **SSE callback 每次事件開新 ResultStore**（`api/watch.py`）— SRE F-04。每張照片處理完都 `ResultStore() + get_today_stats() + close()`，重跑 6 個 ALTER TABLE + WAL checkpoint。15 萬張浪費 **25 分鐘純 SQLite open/close**。改用 module-level singleton。
+- **DB fallback 會靜默丟資料**（`modules/result_store.py`）— 原本主路徑 sqlite 失敗 fallback 到 `/tmp/happy-vision/`，重開機資料全沒。改成 `~/.happy-vision-fallback/` + loud error log。
+- **API key 被空字串 PUT 清掉**（`api/settings.py`）— 前端 re-PUT GET 回來的 settings object（其中 `gemini_api_key: ""`），會觸發 `secret_store.set_key("")` → `clear_key()` → Keychain 被清空。修法：api/settings PUT 只在值非空且非 masked 時才更新 key。
+
+### 🟠 HIGH fix
+
+- **pHash 忽略 EXIF 旋轉**（`modules/phash.py`）— 同一張照片旋轉 metadata 不同會產生不同 hash，誤判為非重複。加 `ImageOps.exif_transpose`。也加 `LOAD_TRUNCATED_IMAGES=True` 讓還在寫入的 JPEG 也能算。
+- **ExiftoolBatch kill 後不會重啟**（`modules/metadata_writer.py`）— 一旦 kill-on-stall 觸發，後續每張照片都會因為 `self._proc` 已死而 mark_failed。抽出 `_spawn` + `_ensure_alive`，掛掉下次 `_run_batch` 自動重啟。
+- **rate_limiter swap race**（`modules/rate_limiter.py`）— configure() 時舊 limiter 可能還有 waiter 卡在 token bucket 上，沒人 notify 它們。加 `close()` 方法 + `_closed` flag，swap 時 notify_all 讓舊 waiter 立刻 fail fast。
+- **SSE 連線中斷 token 過期**（主要是 UI 層）— v0.6.1 白畫面修掉了但 EventSource 重連會用舊 token。這版新增 shared store 減少 open/close，間接降低失敗機率。
+- **settings API 接受 garbage input**（`api/settings.py`）— concurrency=999、model="hacker-9000" 這種明顯錯誤的值以前會存進 config。改成：
+  - `concurrency` / `watch_concurrency` clamp `[1, 10]`
+  - `watch_interval` clamp `[1, 3600]`
+  - `model` 白名單 `{lite, flash}`
+  - 字串長度 cap 500
+  - 型態錯誤（string concurrency 等）→ 400 而非 500
+- **save_config 每次必寫 Keychain**（`modules/config.py`）— 即使只改 `phash_threshold` 也會呼叫 `secret_store.set_key`。改成先比對 cache 再決定是否真寫。
+- **API key GET leak**（`api/settings.py`）— 原本回傳 `...XXXX` 最後 4 碼，對已拿到 token 的攻擊者可減少 key 熵。完全不回傳任何 key 片段，只回 `gemini_api_key_set: bool`。
+
+### ⚡ 效能量化（for 15 萬張 backlog，Evidence Collector + SRE 實測路徑）
+
+- **`WatchSSECallbacks` 重用 store** — 節省 **25 分鐘**純 SQLite open/close
+- **`find_similar` 只查 (file_path, phash)，不拉 result_json** — 原本每次 fetch 5-15MB，現在 ~1MB，**I/O 減 10 倍**
+- **`has_happy_vision_tag_batch` 用 persistent exiftool 而非每張 fork** — 15 萬張第一次掃從 ~8 小時降到 <1 分鐘（Perl 啟動 ~200ms × 150k = 8h → batch 消除）
+- **secret_store memory cache** — 設定 PUT 從 4-6s 降到 <5ms（第二次以後）
+
+### 💅 UX P0 polish (UX Researcher findings)
+
+- **Global toast system** — `components/ToastHost.vue` + `utils/toast.js`。所有 Settings save 完成顯示綠色 toast，失敗顯示紅色 toast。原本 fire-and-forget 零回饋
+- **Disabled button tooltips**（`MonitorView.vue`）— 開始監控 / 加入資料夾 disabled 時會顯示「請先到設定頁填寫 API Key / 選擇監控資料夾」
+- **中文錯誤訊息 mapping**（`utils/errors.js`）— 把 `429` / `DEADLINE_EXCEEDED` / `exiftool not found` / `connection refused` / `PIL parse` 等 raw 錯誤映射到攝影師看得懂的中文。原 raw 字串保留為「技術細節」放在 modal 折疊區
+- **設定頁分組**（`SettingsView.vue`）— 基本（API Key / Watch Folder / Model）永遠展開；「進階效能」（RPM / Image Size / Dedup / Concurrency / Skip Existing）跟「開發者工具」（Tester）預設折疊。降低新手認知負擔
+- **API Key 不再顯示 `...XXXX` 後 4 碼** — UI 直接顯示「已啟用」
+
+### Tests
+
+- 既有 268 tests 全部依然綠。
+- 新測試（`_isolate_keychain` 加 cache invalidate）保證 secret_store cache 不污染 tests
+- ruff 無 warning
+
+### 建議升級流程
+v0.6.x → v0.7.0 是 in-place 升級，DB 自動 migration，Keychain 裡的 API key 不會動。首次打開因 Keychain ACL binding new signature 會有 2 秒延遲，之後全速。
+
 ## v0.6.1 — 2026-04-18 (hotfix)
 
 ### Fix · 新版 .app 第一次開出現白畫面

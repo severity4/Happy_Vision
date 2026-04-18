@@ -75,10 +75,18 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
-    """Save config to disk. API key goes to Keychain; JSON gets everything else."""
+    """Save config to disk. API key goes to Keychain; JSON gets everything else.
+
+    We only rewrite the Keychain when the key actually changed. A settings
+    PUT that doesn't touch the key (user only changed `phash_threshold`,
+    say) should NOT trigger a Keychain write — every write risks a 2s
+    permission prompt timeout on a fresh binary and is pure waste."""
     config_path = get_config_dir() / "config.json"
     if "gemini_api_key" in config:
-        secret_store.set_key(config["gemini_api_key"])
+        new_key = config["gemini_api_key"] or ""
+        current = secret_store.get_key()
+        if new_key != current:
+            secret_store.set_key(new_key)
     to_save = {k: v for k, v in config.items() if k != "gemini_api_key"}
     _save_raw(config_path, to_save)
 

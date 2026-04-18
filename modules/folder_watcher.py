@@ -13,7 +13,12 @@ from modules.gemini_vision import analyze_photo
 from modules.phash import compute_phash
 from modules.pricing import calc_cost_usd
 from modules.logger import setup_logger
-from modules.metadata_writer import ExiftoolBatch, build_exiftool_args, has_happy_vision_tag
+from modules.metadata_writer import (
+    ExiftoolBatch,
+    build_exiftool_args,
+    has_happy_vision_tag,
+    has_happy_vision_tag_batch,
+)
 from modules.result_store import ResultStore
 
 log = setup_logger("folder_watcher")
@@ -307,10 +312,18 @@ class FolderWatcher:
                         skipped += 1
                         continue
 
-                # For unknown or failed files, check IPTC (cross-machine dedup)
+                # For unknown files, check IPTC (cross-machine dedup via tag
+                # written by whichever machine analysed this photo first).
+                # Use the watcher's shared exiftool batch so we don't fork a
+                # new process per file — on a 150k-photo backlog this was
+                # ~8 hours of pure Perl startup, now under a minute.
                 if status is None:
                     try:
-                        if has_happy_vision_tag(photo_path):
+                        if self._batch is not None:
+                            tagged = has_happy_vision_tag_batch(self._batch, photo_path)
+                        else:
+                            tagged = has_happy_vision_tag(photo_path)
+                        if tagged:
                             # Another machine processed it — record locally and skip
                             self._store.save_result(photo_path, {
                                 "file_path": photo_path,

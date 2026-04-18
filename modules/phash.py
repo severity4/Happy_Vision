@@ -33,8 +33,13 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFile, ImageOps
 
+
+# Let Pillow finish reading partially-written JPEGs instead of raising. This
+# matters because folder_watcher can catch a file the moment it's flushed by
+# the camera/tether and the tail may still be landing.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 _HASH_SIZE = 8  # 8x8 difference grid → 64 bits
 
@@ -42,7 +47,12 @@ _HASH_SIZE = 8  # 8x8 difference grid → 64 bits
 # ---- Compute ----
 
 def _dhash_from_pil(img: Image.Image) -> str:
-    """Core dhash. Input: any PIL image. Output: 16-char hex string."""
+    """Core dhash. Input: any PIL image. Output: 16-char hex string.
+
+    Applies EXIF transpose first so the same photo rotated via metadata
+    (common on phones + tether-shot cameras) produces the same hash — Gemini
+    sees the rotated pixels, so the dhash should match what Gemini sees."""
+    img = ImageOps.exif_transpose(img)
     # Greyscale + resize to 9 x 8 so we can compare 8 pairs per row
     grey = img.convert("L").resize(
         (_HASH_SIZE + 1, _HASH_SIZE),

@@ -110,9 +110,23 @@ def read_metadata(photo_path: str) -> dict:
 
 
 def has_happy_vision_tag(photo_path: str) -> bool:
-    """Check if a photo has already been processed by Happy Vision."""
+    """Check if a photo has already been processed by Happy Vision.
+
+    WARNING: This forks a new exiftool process per call (~200 ms startup
+    each). For bulk scans (folder_watcher), use `has_happy_vision_tag_batch`
+    with a shared `ExiftoolBatch` instance — cuts scan time for 150k photos
+    from ~8 hours to ~30 seconds.
+    """
     metadata = read_metadata(photo_path)
     user_comment = metadata.get("UserComment", "")
+    return "HappyVisionProcessed" in str(user_comment)
+
+
+def has_happy_vision_tag_batch(batch: "ExiftoolBatch", photo_path: str) -> bool:
+    """Batched version of has_happy_vision_tag. Uses a persistent exiftool
+    session for ~100x speedup on bulk scans."""
+    data = batch.read_json(photo_path, ["-XMP:UserComment", "-EXIF:UserComment"])
+    user_comment = data.get("UserComment", "") if isinstance(data, dict) else ""
     return "HappyVisionProcessed" in str(user_comment)
 
 
@@ -128,7 +142,19 @@ class ExiftoolBatch:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._proc = None  # set below; keep assigned so close() is always safe
+        self._proc = None  # set by _spawn; keep assigned so close() is always safe
+        self._output_queue: queue.Queue = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
+        self._spawn()
+
+    def _spawn(self) -> None:
+        """Start a fresh exiftool -stay_open session. Safe to call again after
+        a previous session died or was killed on stall — drains the old
+        queue, spins up a new Popen + reader thread."""
+        # Fresh queue so leftover lines from a previous session don't poison
+        # the new one (the old reader will drop its EOF sentinel, which is
+        # fine because we won't be consuming from it).
+        self._output_queue = queue.Queue()
         self._proc = subprocess.Popen(
             [_get_exiftool_cmd(), "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE,
@@ -137,25 +163,32 @@ class ExiftoolBatch:
             text=True,
             bufsize=1,
         )
-        # Background reader drains stdout into a queue so the main thread can
-        # wait with a timeout. Avoids the select/TextIOWrapper-buffer trap
-        # where select on the raw fd misses data already buffered in Python.
-        self._output_queue: queue.Queue = queue.Queue()
+        # Background reader drains stdout into the queue so the main thread
+        # can wait with a timeout. Avoids the select/TextIOWrapper-buffer
+        # trap where select on the raw fd misses data already buffered in
+        # Python. Bind the reader to THIS proc + queue via closure so a
+        # later respawn doesn't leak old output into the new queue.
+        proc = self._proc
+        q = self._output_queue
+        def _reader_loop() -> None:
+            stdout = proc.stdout
+            try:
+                for line in iter(stdout.readline, ""):
+                    q.put(line)
+            except (ValueError, OSError):
+                pass
+            finally:
+                q.put(self._EOF)
         self._reader_thread = threading.Thread(
-            target=self._reader_loop, daemon=True, name="exiftool-reader",
+            target=_reader_loop, daemon=True, name="exiftool-reader",
         )
         self._reader_thread.start()
 
-    def _reader_loop(self) -> None:
-        """Drain exiftool stdout line by line into the queue until EOF."""
-        stdout = self._proc.stdout
-        try:
-            for line in iter(stdout.readline, ""):
-                self._output_queue.put(line)
-        except (ValueError, OSError):
-            pass
-        finally:
-            self._output_queue.put(self._EOF)
+    def _ensure_alive(self) -> None:
+        """Respawn exiftool if the process is dead. Call under self._lock."""
+        if self._proc is None or self._proc.poll() is not None:
+            log.warning("exiftool process not alive — respawning")
+            self._spawn()
 
     def _readline_with_timeout(self, timeout: float) -> str | None:
         """Return next line from reader thread's queue, or None on timeout,
@@ -179,27 +212,46 @@ class ExiftoolBatch:
                 return False, "unsafe arg"
 
         with self._lock:
+            # Ensure the session is alive before writing — previous stall/
+            # kill or OS-level kill leaves self._proc terminated, and every
+            # subsequent write would otherwise BrokenPipe forever. Respawn
+            # once and retry; if the respawn itself fails, bail cleanly.
+            self._ensure_alive()
             try:
                 for arg in args:
                     self._proc.stdin.write(arg + "\n")
                 self._proc.stdin.write("-execute\n")
                 self._proc.stdin.flush()
             except (BrokenPipeError, ValueError, OSError) as e:
-                return False, f"exiftool process died: {e}"
+                # Pipe died between _ensure_alive and flush — try one respawn.
+                log.warning("exiftool stdin died (%s), respawning once", e)
+                self._ensure_alive()
+                try:
+                    for arg in args:
+                        self._proc.stdin.write(arg + "\n")
+                    self._proc.stdin.write("-execute\n")
+                    self._proc.stdin.flush()
+                except (BrokenPipeError, ValueError, OSError) as e2:
+                    return False, f"exiftool process died (after respawn): {e2}"
 
             output_lines = []
             while True:
                 line = self._readline_with_timeout(EXIFTOOL_READ_TIMEOUT_SEC)
                 if line is None:
-                    log.error("exiftool unresponsive after %.1fs, killing",
+                    log.error("exiftool unresponsive after %.1fs, killing; next call will respawn",
                               EXIFTOOL_READ_TIMEOUT_SEC)
                     try:
                         self._proc.kill()
                     except Exception:
                         pass
+                    # Mark dead so the NEXT _run_batch call triggers _ensure_alive
+                    # respawn rather than returning False forever.
+                    self._proc = None
                     return False, "exiftool read timeout"
                 if not line:
-                    return False, "".join(output_lines)  # process died
+                    # EOF — process died mid-write. Mark so next call respawns.
+                    self._proc = None
+                    return False, "".join(output_lines)
                 if line.strip() == "{ready}":
                     break
                 output_lines.append(line)

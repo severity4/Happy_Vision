@@ -14,7 +14,7 @@
             <span class="kicker" style="color: var(--color-text-primary)">GEMINI API KEY</span>
           </div>
           <span class="font-mono text-[11px]" :class="store.settings.gemini_api_key_set ? 'text-success' : 'text-warning'">
-            {{ store.settings.gemini_api_key_set ? `已啟用 · ${store.settings.gemini_api_key}` : '未設定' }}
+            {{ store.settings.gemini_api_key_set ? '已啟用' : '未設定' }}
           </span>
         </div>
         <div class="flex gap-2">
@@ -112,7 +112,7 @@
         </div>
         <div class="grid grid-cols-2 gap-2">
           <button
-            @click="model = 'lite'; save({ model: 'lite' })"
+            @click="model = 'lite'; save({ model: 'lite' }, '模型')"
             class="relative rounded border p-3 text-left transition-colors"
             :class="model === 'lite'
               ? 'border-accent-violet/60 bg-accent-violet/5'
@@ -125,7 +125,7 @@
             <p class="text-[11px] text-text-tertiary mt-1">較快、較便宜</p>
           </button>
           <button
-            @click="model = 'flash'; save({ model: 'flash' })"
+            @click="model = 'flash'; save({ model: 'flash' }, '模型')"
             class="relative rounded border p-3 text-left transition-colors"
             :class="model === 'flash'
               ? 'border-accent-violet/60 bg-accent-violet/5'
@@ -139,6 +139,24 @@
           </button>
         </div>
       </section>
+
+      <!-- === 進階效能（預設折疊） === -->
+      <div>
+        <button
+          @click="showAdvanced = !showAdvanced"
+          class="w-full flex items-center justify-between px-1 py-2 text-left"
+          :aria-expanded="showAdvanced"
+        >
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-[11px] tracking-wider text-accent-violet transition-transform" :class="{ 'rotate-90': showAdvanced }">▸</span>
+            <span class="kicker" style="color: var(--color-text-primary)">進階效能</span>
+            <span class="text-[11px] text-text-tertiary">· 速度、成本、去重</span>
+          </div>
+          <span class="font-mono text-[10px] text-text-tertiary">{{ showAdvanced ? '收起' : '展開' }}</span>
+        </button>
+      </div>
+
+      <template v-if="showAdvanced">
 
       <!-- Throughput · RPM -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5">
@@ -187,7 +205,7 @@
           <button
             v-for="size in [1024, 1536, 2048, 3072]"
             :key="size"
-            @click="imageMaxSize = size; save({ image_max_size: size })"
+            @click="imageMaxSize = size; save({ image_max_size: size }, '上傳影像大小')"
             class="relative rounded border p-2.5 text-left transition-colors"
             :class="imageMaxSize === size
               ? 'border-accent-violet/60 bg-accent-violet/5'
@@ -240,7 +258,7 @@
           type="range"
           min="0"
           max="16"
-          @change="save({ phash_threshold: phashThreshold })"
+          @change="save({ phash_threshold: phashThreshold }, '連拍去重靈敏度')"
           class="w-full h-1 bg-surface-3 rounded appearance-none cursor-pointer accent-accent-violet [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-violet [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(155,123,255,0.6)]"
         />
         <div class="flex justify-between mt-1 font-mono text-[10px] text-text-tertiary">
@@ -250,7 +268,7 @@
       </section>
 
       <!-- Skip existing -->
-      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+      <section class="border border-border-default bg-surface-1 rounded-md p-5" id="skip-existing-section">
         <label for="skip" class="flex items-center justify-between cursor-pointer">
           <div class="flex items-center gap-2">
             <span class="led" :class="skipExisting ? 'led-ok' : ''"></span>
@@ -263,7 +281,7 @@
             <input
               v-model="skipExisting"
               type="checkbox"
-              @change="save({ skip_existing: skipExisting })"
+              @change="save({ skip_existing: skipExisting }, '跳過已處理')"
               class="sr-only peer"
               id="skip"
             />
@@ -272,6 +290,26 @@
           </div>
         </label>
       </section>
+
+      </template>
+
+      <!-- === 開發者工具（預設折疊） === -->
+      <div>
+        <button
+          @click="showDeveloper = !showDeveloper"
+          class="w-full flex items-center justify-between px-1 py-2 text-left"
+          :aria-expanded="showDeveloper"
+        >
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-[11px] tracking-wider text-accent-violet transition-transform" :class="{ 'rotate-90': showDeveloper }">▸</span>
+            <span class="kicker" style="color: var(--color-text-primary)">開發者工具</span>
+            <span class="text-[11px] text-text-tertiary">· 回報問題時用</span>
+          </div>
+          <span class="font-mono text-[10px] text-text-tertiary">{{ showDeveloper ? '收起' : '展開' }}</span>
+        </button>
+      </div>
+
+      <template v-if="showDeveloper">
 
       <!-- Tester identity -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5">
@@ -299,6 +337,8 @@
           class="mt-3 bg-surface-3 hover:bg-surface-4 text-text-primary font-mono text-[11px] tracking-wider px-4 py-2 rounded transition-colors"
         >儲存測試資訊</button>
       </section>
+
+      </template>
     </div>
   </div>
 </template>
@@ -307,6 +347,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import { useWatchStore } from '../stores/watch'
+import { pushToast } from '../utils/toast.js'
 
 const store = useSettingsStore()
 const watchStore = useWatchStore()
@@ -320,6 +361,8 @@ const skipExisting = ref(false)
 const rpm = ref(60)
 const imageMaxSize = ref(3072)
 const phashThreshold = ref(5)
+const showAdvanced = ref(false)
+const showDeveloper = ref(false)
 
 const imageSizeLabels = {
   1024: '最省',
@@ -399,38 +442,50 @@ onMounted(async () => {
 })
 
 async function saveApiKey() {
-  if (apiKey.value) {
+  if (!apiKey.value) return
+  try {
     await store.updateSettings({ gemini_api_key: apiKey.value })
     apiKey.value = ''
+    pushToast('API Key 已儲存', { kind: 'success' })
+  } catch {
+    pushToast('儲存失敗，請重試', { kind: 'error' })
   }
 }
 
-async function save(updates) {
-  await store.updateSettings(updates)
+async function save(updates, label = '') {
+  try {
+    await store.updateSettings(updates)
+    pushToast(label ? `${label} 已儲存` : '設定已儲存', { kind: 'success' })
+  } catch {
+    pushToast('儲存失敗，請重試', { kind: 'error' })
+  }
 }
 
 async function saveTesterInfo() {
   await save({
     tester_name: testerName.value,
     machine_name: machineName.value,
-  })
+  }, '測試資訊')
 }
 
 async function saveRpm() {
   const v = Math.min(5000, Math.max(1, Number(rpm.value) || 60))
   rpm.value = v
-  await store.updateSettings({ rate_limit_rpm: v })
+  await save({ rate_limit_rpm: v }, '處理速度上限')
 }
 
 async function saveConcurrency() {
-  await store.updateSettings({ concurrency: concurrency.value, watch_concurrency: concurrency.value })
   try {
+    await store.updateSettings({ concurrency: concurrency.value, watch_concurrency: concurrency.value })
     await fetch('/api/watch/concurrency', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ concurrency: concurrency.value }),
     })
-  } catch {}
+    pushToast('同時處理數量 已儲存', { kind: 'success' })
+  } catch {
+    pushToast('儲存失敗，請重試', { kind: 'error' })
+  }
 }
 
 async function openBrowser() {
