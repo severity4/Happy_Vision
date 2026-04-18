@@ -226,6 +226,29 @@
         <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ concurrencyDescription }}</p>
       </section>
 
+      <!-- Dedup · pHash -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="phashThreshold === 0 ? '' : phashThreshold > 10 ? 'led-warn' : 'led-ok'"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">DEDUP · 連拍去重</span>
+          </div>
+          <span class="font-mono text-lg font-semibold" :class="phashThreshold === 0 ? 'text-text-tertiary' : phashThreshold > 10 ? 'text-warning' : 'text-success'">{{ phashThreshold === 0 ? 'OFF' : phashThreshold }}</span>
+        </div>
+        <input
+          v-model.number="phashThreshold"
+          type="range"
+          min="0"
+          max="16"
+          @change="save({ phash_threshold: phashThreshold })"
+          class="w-full h-1 bg-surface-3 rounded appearance-none cursor-pointer accent-accent-violet [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-violet [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(155,123,255,0.6)]"
+        />
+        <div class="flex justify-between mt-1 font-mono text-[10px] text-text-tertiary">
+          <span>0 OFF</span><span>5 預設</span><span>10</span><span>16 寬鬆</span>
+        </div>
+        <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ phashDescription }}</p>
+      </section>
+
       <!-- Skip existing -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5">
         <label for="skip" class="flex items-center justify-between cursor-pointer">
@@ -296,6 +319,7 @@ const concurrency = ref(1)
 const skipExisting = ref(false)
 const rpm = ref(60)
 const imageMaxSize = ref(3072)
+const phashThreshold = ref(5)
 
 const imageSizeLabels = {
   1024: '最省',
@@ -350,6 +374,15 @@ const imageSizeDescription = computed(() => {
   return '1024px · 小字/遠景會糊，input tokens 約減 90%，僅推薦給大量歷史庫存補跑'
 })
 
+const phashDescription = computed(() => {
+  const n = phashThreshold.value
+  if (n === 0) return '關閉去重：每張都送 Gemini。保守，但有連拍時會花多一倍錢'
+  if (n <= 3) return `嚴格比對（${n} bits）· 只合併幾乎一模一樣的連拍。誤判極低，但遺漏率較高`
+  if (n <= 6) return `預設靈敏度（${n} bits）· 婚禮連拍 5-15 張會歸為同組，只分析 1 張，約省 20-40%`
+  if (n <= 10) return `寬鬆比對（${n} bits）· 同場景不同動作也算同組，省更多但描述可能套錯`
+  return `極寬鬆（${n} bits）· 會把不同人物或場景誤判為重複，不建議開這麼高`
+})
+
 onMounted(async () => {
   await store.fetchSettings()
   model.value = store.settings.model || 'lite'
@@ -362,6 +395,7 @@ onMounted(async () => {
   imageMaxSize.value = [1024, 1536, 2048, 3072].includes(store.settings.image_max_size)
     ? store.settings.image_max_size
     : 3072
+  phashThreshold.value = Math.min(16, Math.max(0, store.settings.phash_threshold ?? 5))
 })
 
 async function saveApiKey() {

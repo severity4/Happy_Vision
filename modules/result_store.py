@@ -62,11 +62,18 @@ class ResultStore:
             ("total_tokens", "INTEGER"),
             ("cost_usd", "REAL"),
             ("model", "TEXT"),
+            # v0.6.0: near-duplicate detection. phash is the perceptual hash
+            # of the photo content (16-char hex); duplicate_of points to the
+            # file_path of the master photo when this row was saved as a
+            # near-duplicate without a fresh Gemini call.
+            ("phash", "TEXT"),
+            ("duplicate_of", "TEXT"),
         ]:
             try:
                 self.conn.execute(f"ALTER TABLE results ADD COLUMN {col} {coltype}")
             except sqlite3.OperationalError:
                 pass
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_phash ON results(phash)")
         self.conn.commit()
 
     def save_result(
@@ -75,6 +82,8 @@ class ResultStore:
         result: dict,
         usage: dict | None = None,
         cost_usd: float | None = None,
+        phash: str | None = None,
+        duplicate_of: str | None = None,
     ) -> None:
         now = datetime.now().isoformat()
         usage = usage or {}
@@ -82,8 +91,9 @@ class ResultStore:
             self.conn.execute(
                 """INSERT OR REPLACE INTO results
                    (file_path, status, result_json, input_tokens, output_tokens,
-                    total_tokens, cost_usd, model, created_at, updated_at)
-                   VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    total_tokens, cost_usd, model, phash, duplicate_of,
+                    created_at, updated_at)
+                   VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_path,
                     json.dumps(result, ensure_ascii=False),
@@ -92,11 +102,58 @@ class ResultStore:
                     usage.get("total_tokens"),
                     cost_usd,
                     usage.get("model"),
+                    phash,
+                    duplicate_of,
                     now,
                     now,
                 ),
             )
             self.conn.commit()
+
+    def find_similar(self, target_phash: str, threshold: int = 5,
+                     limit: int = 5000) -> dict | None:
+        """Find the closest completed result by pHash Hamming distance.
+
+        Scans recent completed rows (up to `limit`) with a non-null phash
+        and returns {file_path, phash, result (dict), distance} for the best
+        match within `threshold` bits, or None if nothing is close enough.
+        Returns the master row (one without duplicate_of set) so dup chains
+        don't spiral — if a near-match is itself a duplicate, we follow its
+        pointer back to the master."""
+        from modules.phash import find_closest
+        rows = self.conn.execute(
+            """SELECT file_path, phash, result_json, duplicate_of
+               FROM results
+               WHERE status = 'completed' AND phash IS NOT NULL
+               ORDER BY updated_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        candidates = [(r["file_path"], r["phash"]) for r in rows]
+        match = find_closest(target_phash, candidates, threshold)
+        if match is None:
+            return None
+        match_path, match_hash, distance = match
+        # Follow duplicate_of to the master to avoid duplicate-of-duplicate chains
+        master_path = match_path
+        for _ in range(3):  # cap hops
+            row = self.conn.execute(
+                "SELECT file_path, phash, result_json, duplicate_of "
+                "FROM results WHERE file_path = ? AND status = 'completed'",
+                (master_path,),
+            ).fetchone()
+            if row is None:
+                return None
+            if not row["duplicate_of"]:
+                break
+            master_path = row["duplicate_of"]
+        else:
+            return None
+        return {
+            "file_path": row["file_path"],
+            "phash": row["phash"],
+            "result": json.loads(row["result_json"]) if row["result_json"] else {},
+            "distance": distance,
+        }
 
     def get_result(self, file_path: str) -> dict | None:
         row = self.conn.execute(
@@ -108,14 +165,17 @@ class ResultStore:
         return None
 
     def get_result_with_usage(self, file_path: str) -> dict | None:
-        """Same as get_result but augments the dict with a `_usage` sub-object.
+        """Same as get_result but augments the dict with `_usage` + `_dedup`.
 
         `_usage` = {input_tokens, output_tokens, total_tokens, cost_usd, model}
-        Absent for rows saved before the tokens migration (pre-v0.5.0).
+          — absent for rows saved before the tokens migration (pre-v0.5.0).
+        `_dedup` = {phash, duplicate_of}
+          — present when either field is set. duplicate_of points to the
+          master row's file_path when this photo was saved as a near-dup.
         """
         row = self.conn.execute(
             """SELECT result_json, input_tokens, output_tokens, total_tokens,
-                      cost_usd, model
+                      cost_usd, model, phash, duplicate_of
                FROM results WHERE file_path = ? AND status = 'completed'""",
             (file_path,),
         ).fetchone()
@@ -129,6 +189,11 @@ class ResultStore:
                 "total_tokens": row["total_tokens"] or 0,
                 "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else 0.0,
                 "model": row["model"] or "",
+            }
+        if row["phash"] or row["duplicate_of"]:
+            data["_dedup"] = {
+                "phash": row["phash"] or "",
+                "duplicate_of": row["duplicate_of"] or "",
             }
         return data
 
@@ -178,20 +243,22 @@ class ResultStore:
         return [dict(row) for row in rows]
 
     def get_today_stats(self) -> dict:
-        """Get today's completed/failed counts and total USD cost."""
+        """Get today's completed/failed counts, USD cost, and dedup savings."""
         today = datetime.now().strftime("%Y-%m-%d")
         row = self.conn.execute(
             "SELECT "
             "SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as completed, "
             "SUM(CASE WHEN status = 'failed' AND updated_at LIKE ? THEN 1 ELSE 0 END) as failed, "
-            "COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN cost_usd ELSE 0 END), 0) as cost "
+            "COALESCE(SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? THEN cost_usd ELSE 0 END), 0) as cost, "
+            "SUM(CASE WHEN status = 'completed' AND updated_at LIKE ? AND duplicate_of IS NOT NULL THEN 1 ELSE 0 END) as dedup_saved "
             "FROM results",
-            (today + "%", today + "%", today + "%"),
+            (today + "%", today + "%", today + "%", today + "%"),
         ).fetchone()
         return {
             "completed_today": row["completed"] or 0,
             "failed_today": row["failed"] or 0,
             "cost_usd_today": float(row["cost"] or 0.0),
+            "dedup_saved_today": row["dedup_saved"] or 0,
         }
 
     def get_summary(self) -> dict:

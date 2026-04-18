@@ -10,6 +10,7 @@ from pathlib import Path
 from modules.config import load_config, save_config
 from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
+from modules.phash import compute_phash
 from modules.pricing import calc_cost_usd
 from modules.logger import setup_logger
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args, has_happy_vision_tag
@@ -365,21 +366,53 @@ class FolderWatcher:
             config = load_config()
             api_key = config.get("gemini_api_key", "")
             model = config.get("model", "lite")
+            phash_threshold = int(config.get("phash_threshold", 5))
+
+            # v0.6.0: compute pHash first and scan the store for a near-match.
+            # If found, copy the master's analysis data, write IPTC, save as a
+            # duplicate — skipping the Gemini call entirely.
+            photo_phash: str | None = None
+            dedup_match = None
+            if phash_threshold > 0:
+                try:
+                    photo_phash = compute_phash(photo_path)
+                except Exception as e:
+                    log.warning("pHash compute failed for %s: %s", photo_path, e)
+                if photo_phash and self._store is not None:
+                    try:
+                        dedup_match = self._store.find_similar(photo_phash, phash_threshold)
+                    except Exception as e:
+                        log.warning("pHash similarity lookup failed: %s", e)
+                        dedup_match = None
 
             analysis_started = time.perf_counter()
-            image_max_size = int(config.get("image_max_size", 3072))
-            result, usage = analyze_photo(
-                photo_path, api_key=api_key, model=model, max_size=image_max_size
-            )
-            analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
-
-            cost_usd = None
-            if usage:
-                cost_usd = calc_cost_usd(
-                    usage.get("model", ""),
-                    usage.get("input_tokens", 0),
-                    usage.get("output_tokens", 0),
+            if dedup_match:
+                # Near-duplicate of an existing completed photo. Reuse its
+                # analysis, write IPTC, save as duplicate. No Gemini call.
+                result = dedup_match["result"]
+                usage = None
+                cost_usd = None
+                analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
+                log.info(
+                    "pHash dedup: %s matches %s (distance=%d) — skipping Gemini",
+                    Path(photo_path).name,
+                    Path(dedup_match["file_path"]).name,
+                    dedup_match["distance"],
                 )
+            else:
+                image_max_size = int(config.get("image_max_size", 3072))
+                result, usage = analyze_photo(
+                    photo_path, api_key=api_key, model=model, max_size=image_max_size
+                )
+                analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
+
+                cost_usd = None
+                if usage:
+                    cost_usd = calc_cost_usd(
+                        usage.get("model", ""),
+                        usage.get("input_tokens", 0),
+                        usage.get("output_tokens", 0),
+                    )
 
             if not result:
                 if self._store:
@@ -419,7 +452,12 @@ class FolderWatcher:
                 metadata_ms = None
 
             if self._store:
-                self._store.save_result(photo_path, result, usage=usage, cost_usd=cost_usd)
+                self._store.save_result(
+                    photo_path, result,
+                    usage=usage, cost_usd=cost_usd,
+                    phash=photo_phash,
+                    duplicate_of=dedup_match["file_path"] if dedup_match else None,
+                )
             if self._events is not None:
                 self._events.add_event(
                     "watch_photo_completed",
@@ -431,6 +469,7 @@ class FolderWatcher:
                         "input_tokens": usage.get("input_tokens") if usage else None,
                         "output_tokens": usage.get("output_tokens") if usage else None,
                         "cost_usd": cost_usd,
+                        "deduped_from": dedup_match["file_path"] if dedup_match else None,
                     },
                 )
             log.info("Processed: %s", photo_path)

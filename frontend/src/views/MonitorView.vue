@@ -294,6 +294,15 @@
                   </div>
                 </div>
 
+                <!-- Dedup badge -->
+                <div v-if="detailData._dedup?.duplicate_of" class="border border-success/30 bg-success/[0.05] rounded p-3">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="led led-ok"></span>
+                    <span class="kicker" style="color: var(--color-success)">DEDUP · 近似連拍</span>
+                  </div>
+                  <p class="text-[12px] text-text-secondary">此張 metadata 複製自 <span class="font-mono text-success">{{ relativePath(detailData._dedup.duplicate_of) }}</span>，未呼叫 Gemini（省下一次 API call）</p>
+                </div>
+
                 <!-- Usage / cost -->
                 <div v-if="detailData._usage" class="border border-accent-violet/20 bg-accent-violet/[0.04] rounded p-3">
                   <div class="flex items-center justify-between mb-2">

@@ -112,6 +112,7 @@
             <span><span class="text-text-tertiary">佇列</span> <span :class="watchStore.queueSize > 0 ? 'text-warning' : 'text-text-primary'">{{ watchStore.queueSize }}</span></span>
             <span><span class="text-text-tertiary">完成</span> <span class="text-success">{{ watchStore.completedToday }}</span></span>
             <span v-if="watchStore.failedToday > 0"><span class="text-text-tertiary">失敗</span> <span class="text-error">{{ watchStore.failedToday }}</span></span>
+            <span v-if="watchStore.dedupSavedToday > 0" title="連拍去重省掉的分析張數"><span class="text-text-tertiary">去重</span> <span class="text-success">{{ watchStore.dedupSavedToday }}</span></span>
             <span v-if="watchStore.costUsdToday > 0"><span class="text-text-tertiary">花費</span> <span class="text-accent-violet">{{ formatCost(watchStore.costUsdToday) }}</span></span>
           </div>
         </div>

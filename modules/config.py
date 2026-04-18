@@ -30,6 +30,11 @@ DEFAULT_CONFIG = {
     # runs at the cost of some description detail.
     "rate_limit_rpm": 60,
     "image_max_size": 3072,
+    # Near-duplicate detection (v0.6.0+). Threshold is the max Hamming distance
+    # between two 64-bit pHashes to be considered "the same photo" for dedup.
+    # 0 = disables dedup entirely. 5 catches typical burst duplicates without
+    # merging different moments. See modules/phash.py for tuning guidance.
+    "phash_threshold": 5,
 }
 
 

@@ -9,6 +9,7 @@ export const useWatchStore = defineStore('watch', () => {
   const completedToday = ref(0)
   const failedToday = ref(0)
   const costUsdToday = ref(0)
+  const dedupSavedToday = ref(0)
   const recentItems = ref([])
 
   let eventSource = null
@@ -26,6 +27,7 @@ export const useWatchStore = defineStore('watch', () => {
       completedToday.value = data.completed_today || 0
       failedToday.value = data.failed_today || 0
       costUsdToday.value = data.cost_usd_today || 0
+      dedupSavedToday.value = data.dedup_saved_today || 0
     } catch {}
   }
 
@@ -55,6 +57,7 @@ export const useWatchStore = defineStore('watch', () => {
       completedToday.value = data.completed_today
       failedToday.value = data.failed_today
       if (typeof data.cost_usd_today === 'number') costUsdToday.value = data.cost_usd_today
+      if (typeof data.dedup_saved_today === 'number') dedupSavedToday.value = data.dedup_saved_today
       fetchRecent()
     })
 
@@ -62,6 +65,7 @@ export const useWatchStore = defineStore('watch', () => {
       const data = JSON.parse(e.data)
       failedToday.value = data.failed_today
       if (typeof data.cost_usd_today === 'number') costUsdToday.value = data.cost_usd_today
+      if (typeof data.dedup_saved_today === 'number') dedupSavedToday.value = data.dedup_saved_today
       fetchRecent()
     })
 
@@ -153,7 +157,7 @@ export const useWatchStore = defineStore('watch', () => {
   }
 
   return {
-    status, folder, queueSize, processing, completedToday, failedToday, costUsdToday, recentItems,
+    status, folder, queueSize, processing, completedToday, failedToday, costUsdToday, dedupSavedToday, recentItems,
     sseConnected,
     init, connectSSE, disconnectSSE, fetchStatus, fetchRecent,
     startWatch, pauseWatch, resumeWatch, stopWatch, enqueueFolder,

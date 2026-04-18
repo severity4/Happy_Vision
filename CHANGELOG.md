@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.6.0 — 2026-04-18
+
+### Dedup · 連拍去重（省錢大招第一發）
+活動攝影 workflow 天然有大量連拍：婚禮儀式 10 張幾乎一樣、演講講者同一動作抓 5 張。之前每張都送 Gemini，這版改成**先算 pHash → 比對已分析過的近似照片 → 命中就直接套 metadata，不呼叫 Gemini**。現場砍 20-40% 的 API 成本與時間。
+
+- **`modules/phash.py`** — `compute_phash()` 產出 16-char hex 的 pHash（imagehash 套件 + scipy.fftpack.dct），`hamming_distance()` 比對兩個 hash 差幾個 bit，`find_closest(target, candidates, threshold)` 線性掃描挑最近的（支援 exact match 短路）。
+- **`result_store` 加兩個欄位**（additive migration 冪等）：`phash TEXT` + `duplicate_of TEXT` + `idx_results_phash` 索引。
+- **`result_store.find_similar(target_phash, threshold)`** — 掃 recent 5000 筆 completed 的 phash，找 Hamming 距離最小且 ≤ threshold 的一筆。自動 follow `duplicate_of` 回主照，避免 dup-of-dup chain（最多 3 跳）。
+- **`folder_watcher._process_one` 插入 dedup**：在呼叫 `analyze_photo` 之前先算 pHash、查 store 有沒有近似照片；命中就複製主照的 analysis、寫 IPTC、存 `duplicate_of = master_path`，**完全跳過 Gemini**。未命中就走原本流程，但也會把 pHash 一起存下來供未來比對。
+- **`get_today_stats` 加 `dedup_saved_today`**，SSE 同步廣播，App.vue status strip 有資料時多一欄「去重 N」(綠字)。
+- **Detail modal 加 DEDUP 徽章**：當 `_dedup.duplicate_of` 有值，顯示綠框綠燈 + 「此張 metadata 複製自 XXX.JPG，未呼叫 Gemini」。
+- **`modules/config.py` 加 `phash_threshold: 5`**（0 = 關閉，5 = 預設捕捉連拍而不誤合併不同時刻）。
+- **`api/settings`** 支援 `phash_threshold`（clamp `[0, 16]`）。
+- **Settings UI** 新增 `DEDUP · 連拍去重` section：0-16 slider（0 = OFF 標記），LED 跟著值變色（關 / 安全 / 寬鬆 / 警告），動態描述說明每個 level 的行為。
+
+### 實測收益
+婚禮連拍場景下，一組 10 張幾乎一樣的儀式照片，**只會呼叫 Gemini 1 次**，剩下 9 張直接用相同 metadata。對 15 萬張 backlog（典型 30% 連拍重複）：
+- 純去重：**省 ~30% = \$25 USD / ~NT\$800** 的 API cost
+- 搭配 v0.5.1 的 2000 RPM + 1536 image_max：**\$15 USD / ~NT\$500 + 55 分鐘**
+
+### Tests
+- `test_phash.py` — 13 個（hash 產生、對稱性、異常輸入、threshold gating、find_closest 挑最近 + 短路）
+- `test_result_store_phash.py` — 9 個（migration column + index、save phash/duplicate_of、find_similar 找最近/回 None、ignore no-phash 列、follow duplicate_of chain、get_result_with_usage 露出 _dedup、today_stats 計 dedup）
+- `test_folder_watcher_dedup.py` — 5 個（相似照片跳 Gemini、不相似照片都跑、threshold=0 停用、master 照存 phash）
+- **241 → 268 passed**（+27）
+
+### Build
+- `requirements.txt` 加 `imagehash>=4.3`
+- `build_app.py` 加 hidden-imports `modules.phash` / `imagehash` / `pywt` / `scipy.fftpack`
+
+### 邊界與已知限制
+- **find_similar 掃最近 5000 筆**。超過這個量的極大資料夾會漏掉早期照片的比對。之後可加 pHash prefix bucket 或 ANN index
+- pHash 對「角度相近、光線相近」的連拍超準。對「完全不同 pose 但同場景」（例如同一個主持人不同時刻）誤合併率會隨 threshold 上升，建議保持 5 不要隨便拉高
+- 重拉 threshold 不會 retroactive 影響已存的 duplicate_of 標記，只影響之後新進的照片
+
 ## v0.5.1 — 2026-04-18
 
 ### Throughput tuning · 速度與成本的旋鈕

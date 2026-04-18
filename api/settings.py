@@ -40,6 +40,7 @@ def update_settings():
         "watch_interval",
         "rate_limit_rpm",
         "image_max_size",
+        "phash_threshold",
     ]:
         if key in data:
             if key == "rate_limit_rpm":
@@ -54,6 +55,9 @@ def update_settings():
                         "error": f"image_max_size must be one of {sorted(ALLOWED_IMAGE_SIZES)}"
                     }), 400
                 config[key] = size
+            elif key == "phash_threshold":
+                # 0 = disabled; above ~12 is basically "everything is a dup"
+                config[key] = max(0, min(16, int(data[key])))
             else:
                 config[key] = data[key]
     if "gemini_api_key" in data and not data["gemini_api_key"].startswith("..."):
