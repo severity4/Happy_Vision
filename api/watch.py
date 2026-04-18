@@ -205,10 +205,17 @@ def watch_events():
         _sse_queues.append(q)
 
     def stream():
+        # Fire an immediate comment frame so the client's EventSource
+        # `onopen` fires right away. Previously we only sent data when the
+        # first event (or 30s keepalive) arrived — the UI showed "SSE 連線
+        # 中斷" for the first 30 seconds of every session because EventSource
+        # hadn't received any bytes yet. Evidence Collector flagged this
+        # as UX-level P0 in v0.7.0.
+        yield ": connected\n\n"
         try:
             while True:
                 try:
-                    msg = q.get(timeout=30)
+                    msg = q.get(timeout=15)
                     yield msg
                 except queue.Empty:
                     yield ": keepalive\n\n"

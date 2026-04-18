@@ -31,6 +31,14 @@ def get_settings():
     # search space for anyone who scraped the token. UI drives its "activated"
     # state from `gemini_api_key_set` (bool) instead.
     safe["gemini_api_key"] = ""
+    # Keep app_version aligned with /api/health so release audits don't see
+    # two different strings. DEFAULT_CONFIG has "dev" which was never updated
+    # at release time; the runtime truth is the bundled VERSION file.
+    try:
+        import web_ui
+        safe["app_version"] = web_ui._get_version()
+    except Exception:
+        pass
     return jsonify(safe)
 
 

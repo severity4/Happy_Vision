@@ -23,17 +23,34 @@ def find_exiftool() -> str:
 
 
 def build_frontend():
-    """Build Vue frontend if not already built."""
+    """ALWAYS rebuild Vue frontend before packaging.
+
+    Previously this skipped `npm run build` when frontend/dist already
+    existed. That's a release-time footgun: if you edit a Vue file and
+    run `make app` without first rebuilding, the bundled .app will ship
+    with stale JS/CSS and none of your UI changes will actually reach
+    users (Evidence Collector caught this shipping v0.7.0 with v0.6.x
+    bundle contents). Rebuild every time — it's only ~150ms with Vite.
+    """
+    print("Building frontend (always, to ensure fresh bundle)...")
+    subprocess.run(
+        ["npm", "run", "build"],
+        cwd=PROJECT_DIR / "frontend",
+        check=True,
+    )
     dist = PROJECT_DIR / "frontend" / "dist"
-    if not dist.exists():
-        print("Building frontend...")
-        subprocess.run(
-            ["npm", "run", "build"],
-            cwd=PROJECT_DIR / "frontend",
-            check=True,
-        )
-    else:
-        print("Frontend dist/ already exists, skipping build.")
+    # Verify the produced bundle so accidentally-missing outputs fail loud.
+    for p in ("index.html", "assets"):
+        if not (dist / p).exists():
+            raise RuntimeError(
+                f"frontend/dist/{p} missing after npm run build — "
+                "packaging would ship a broken frontend"
+            )
+    # Print the JS bundle hash so release audits can verify what's inside.
+    assets = dist / "assets"
+    js_files = sorted(assets.glob("index-*.js"))
+    if js_files:
+        print(f"Bundle JS: {js_files[-1].name} ({js_files[-1].stat().st_size // 1024} KB)")
 
 
 def build_app():

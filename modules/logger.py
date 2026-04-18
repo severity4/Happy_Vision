@@ -12,16 +12,25 @@ from modules.config import get_config_dir
 _REDACT = "REDACTED"
 
 _PATTERNS: list[tuple[re.Pattern, str | None]] = [
-    # Google API key (AIza + ≥35 alphanumerics / _ / -; real keys are exactly
-    # 35 trailing chars but match greedily so malformed or future variants
-    # don't leak a tail).
-    (re.compile(r"AIza[0-9A-Za-z_\-]{35,}"), None),
-    # Google OAuth access tokens (ya29.xxxx)
+    # Google API key — AIza followed by ≥20 allowed chars. Real keys are 39
+    # chars total (AIza + 35), but we accept 24+ to catch truncated/malformed
+    # logs that would otherwise leak a tail. A standalone "AIza" literal is
+    # safe; we only redact when followed by meaningful entropy.
+    (re.compile(r"AIza[0-9A-Za-z_\-]{20,}"), None),
+    # Google OAuth / refresh tokens (ya29.x..., 1//x...)
     (re.compile(r"ya29\.[A-Za-z0-9._\-]+"), None),
-    # Bearer / Token headers
-    (re.compile(r"(?i)(Bearer|Token)\s+[A-Za-z0-9._\-]+"), r"\1 " + _REDACT),
-    # api_key=xxx / access_token=xxx / key=xxx (query strings, JSON-ish)
-    (re.compile(r"(?i)(api[_\-]?key|access[_\-]?token|key)=([A-Za-z0-9._\-]+)"),
+    (re.compile(r"1//[0-9A-Za-z_\-]{20,}"), None),
+    # Anthropic-style keys (future-proof — sk-ant-, sk-*)
+    (re.compile(r"sk(-ant)?-[A-Za-z0-9_\-]{20,}"), None),
+    # Authorization header (any scheme: Bearer, Basic, Token, Digest, ...)
+    (re.compile(r"(?i)(Authorization|X-Goog-Api-Key|X-Api-Key)\s*:\s*\S+"),
+     r"\1: " + _REDACT),
+    (re.compile(r"(?i)(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9._\-=+/]+"),
+     r"\1 " + _REDACT),
+    # api_key=xxx / access_token=xxx / key=xxx / token=xxx in query strings,
+    # JSON, YAML, form bodies. Case-insensitive; word-boundary to avoid
+    # catching "invokeKey=" type false positives.
+    (re.compile(r"(?i)\b(api[_\-]?key|access[_\-]?token|secret[_\-]?key|token|key)\s*[:=]\s*['\"]?([A-Za-z0-9._\-]+)"),
      r"\1=" + _REDACT),
 ]
 
@@ -51,6 +60,10 @@ class SensitiveDataFilter(logging.Filter):
                     k: (_scrub(v) if isinstance(v, str) else v)
                     for k, v in record.args.items()
                 }
+        # Exception tracebacks — the formatted exc_text — can also contain
+        # secrets if an exception's repr includes the key. Scrub there too.
+        if record.exc_text:
+            record.exc_text = _scrub(record.exc_text)
         return True
 
 

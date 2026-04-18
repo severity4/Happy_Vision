@@ -116,34 +116,49 @@ def _build_styles():
 
 
 def _summary_stats(results: list[dict]) -> dict:
-    """Aggregate counts, tokens, cost by model."""
+    """Aggregate counts, tokens, cost by model. Also counts dedup hits so
+    the report can show how much money the pHash dedup actually saved."""
     total = len(results)
     total_input = 0
     total_output = 0
     total_cost = 0.0
+    dedup_count = 0
+    # Rough estimate of what a deduped row WOULD have cost had we called
+    # Gemini — we use the average cost per non-deduped row in the same set.
     per_model: dict[str, dict] = {}
     categories: Counter = Counter()
     tags: Counter = Counter()
+    real_calls = 0
     for r in results:
         u = r.get("_usage") or {}
         model = u.get("model") or "(unknown)"
         inp = int(u.get("input_tokens") or 0)
         out = int(u.get("output_tokens") or 0)
         cost = float(u.get("cost_usd") or 0.0)
-        total_input += inp
-        total_output += out
-        total_cost += cost
-        bucket = per_model.setdefault(model, {"count": 0, "input": 0, "output": 0, "cost": 0.0})
-        bucket["count"] += 1
-        bucket["input"] += inp
-        bucket["output"] += out
-        bucket["cost"] += cost
+        is_dup = bool((r.get("_dedup") or {}).get("duplicate_of"))
+        if is_dup:
+            dedup_count += 1
+        else:
+            real_calls += 1
+            total_input += inp
+            total_output += out
+            total_cost += cost
+            bucket = per_model.setdefault(model, {"count": 0, "input": 0, "output": 0, "cost": 0.0})
+            bucket["count"] += 1
+            bucket["input"] += inp
+            bucket["output"] += out
+            bucket["cost"] += cost
         if r.get("category"):
             categories[r["category"]] += 1
         for kw in r.get("keywords") or []:
             tags[kw] += 1
+    avg_cost_per_real = (total_cost / real_calls) if real_calls else 0.0
+    estimated_dedup_savings = avg_cost_per_real * dedup_count
     return {
         "total": total,
+        "real_calls": real_calls,
+        "dedup_count": dedup_count,
+        "dedup_savings_usd": estimated_dedup_savings,
         "input_tokens": total_input,
         "output_tokens": total_output,
         "cost_usd": total_cost,
@@ -190,6 +205,14 @@ def _summary_page(results: list[dict], styles: dict, folder: str | None) -> list
             _kv("總 tokens", f"{(stats['input_tokens'] + stats['output_tokens']):,}", styles),
         ],
     ]
+    # If dedup fired at all, show savings as a 3rd row — concrete ROI.
+    if stats["dedup_count"] > 0:
+        overview_data.append([
+            _kv(f"連拍去重省下 · {stats['dedup_count']} 張",
+                _fmt_usd(stats["dedup_savings_usd"]), styles),
+            _kv("實際 Gemini 呼叫次數",
+                f"{stats['real_calls']:,} / {stats['total']:,}", styles),
+        ])
     overview = Table(overview_data, colWidths=[85 * mm, 85 * mm])
     overview.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),

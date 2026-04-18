@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.7.1 — 2026-04-19 (hotfix · v0.7.0 UX 其實沒 ship)
+
+Evidence Collector 驗收 v0.7.0 時發現 **所有 UX 修改實際沒被打進 .app**：
+- 「進階效能」/「開發者工具」collapsible 不存在於 bundle
+- Save toast 不存在於 bundle
+- Disabled button tooltip `title=""`
+
+根因是 `build_app.build_frontend()` 看到 `frontend/dist/` 已存在就會 skip `npm run build`。我在 v0.7.0 時改了 Vue 原始碼但沒手動 `rm -rf frontend/dist`，所以 PyInstaller 打包的是前一天 v0.6.1 時代的 bundle。
+
+### 🔴 Critical
+- **`build_app.py` 永遠跑 `npm run build`** — 再也不 skip。另外加 sanity check 驗證 `index.html` + `assets/` 確實產出，log 印出 bundle 檔名 + KB，release audit 可驗。
+- **SSE 初始 30s 誤報「連線中斷」** — `api/watch/events` 以前只有在第一個事件或 30s keepalive 才吐 bytes，導致 EventSource `onopen` 30 秒都沒 fire，UI 顯示紅色斷線 badge 半分鐘。現在 stream 開頭立即 `yield ": connected\n\n"`，`onopen` 瞬間觸發。keepalive 間隔也從 30s 調短到 15s，掉線偵測更快。
+
+### Minor
+- `/api/settings` GET 的 `app_version` 改從 `web_ui._get_version()` 讀，跟 `/api/health` 對齊（原本一個 "dev" 一個 "0.7.0"）。
+- 新增 `api/system.py` host allowlist（`aistudio.google.com` / `ai.google.dev` / `console.cloud.google.com` / `github.com`）— Security M4。`open_external` 原本只檢查 scheme，現在加 host 白名單防止被當 phishing 跳板。
+- Logger regex 補洞 — 加上 Authorization header / X-Goog-Api-Key / Basic auth / 1//... OAuth refresh token / sk-ant-... / 更寬的 API key 模式（≥20 chars 而非 ≥35，抓住 truncated log 的 tail）— Security L1。
+- PDF 報告封面新增「**連拍去重省下 N 張 ≈ \$X**」— 讓使用者直接看到 dedup 帶來的 ROI。需要有實際 dedup 才會顯示。
+- 新增 `test_secret_store_cache.py` (5 tests) — regression gate，防 v0.7.0 的 200x PUT 加速被偷偷破壞。
+
 ## v0.7.0 — 2026-04-19 (穩定性 + 效能 + UX 全面硬化)
 
 本版整合了 5 個專業 agent（Code Reviewer, Evidence Collector, Security, UX Researcher, SRE）的深度 review findings，修掉 4 個 CRITICAL + 7 個 HIGH bug，量化改進 15 萬張 backlog 場景的效能，並處理 UX P0 polish。
