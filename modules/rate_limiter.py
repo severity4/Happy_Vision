@@ -25,6 +25,10 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
 
+    @property
+    def rate_per_minute(self) -> int:
+        return int(self._capacity)
+
     def _refill(self) -> None:
         """Must be called with self._lock held."""
         now = time.monotonic()
@@ -54,13 +58,25 @@ class RateLimiter:
                 self._cond.wait(timeout=wait_time)
 
 
-# Default limiter used by gemini_vision.analyze_photo. Configured at import time
-# with a conservative default; web_ui or pipeline can call `configure(...)` to
-# adjust based on user's Gemini plan.
+# Default limiter used by gemini_vision.analyze_photo. Starts at a conservative
+# 60 RPM (Gemini free tier). web_ui.py calls `configure(...)` during post-start
+# init to apply the user's configured `rate_limit_rpm`. Runtime changes via
+# /api/settings also call configure().
+#
+# IMPORTANT: callers must access this through `rate_limiter.default_limiter`
+# (module attribute), NOT `from modules.rate_limiter import default_limiter`,
+# so that `configure()` swaps are visible live.
 default_limiter = RateLimiter(rate_per_minute=60)
 
 
 def configure(rate_per_minute: int) -> None:
-    """Replace the default limiter with one at the given rate."""
+    """Replace the default limiter with one at the given rate.
+
+    Clamps to [1, 5000] — above 2000 is beyond anything Google publishes for
+    flash-lite on paid tier so we leave headroom but don't let users footgun
+    themselves with nonsense values. Returns silently if already at the rate."""
     global default_limiter
-    default_limiter = RateLimiter(rate_per_minute=rate_per_minute)
+    rate = max(1, min(5000, int(rate_per_minute)))
+    if rate == default_limiter.rate_per_minute:
+        return
+    default_limiter = RateLimiter(rate_per_minute=rate)

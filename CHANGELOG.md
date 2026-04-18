@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.1 — 2026-04-18
+
+### Throughput tuning · 速度與成本的旋鈕
+v0.5.0 把 cost 的量尺裝好了，這版把旋鈕接上去 — 使用者第一次可以自己調「要速度還是要品質」，並且用 v0.5.0 的 cost 面板驗證優化效果。
+
+- **`modules/rate_limiter.py`** — `configure(rate_per_minute)` 會替換 module-level `default_limiter` 到新的 RateLimiter 實例，並 clamp 到 `[1, 5000]`。同 rate 重配是 no-op。
+- **`modules/gemini_vision.py`** — 改 `from modules import rate_limiter` 讓 runtime `configure()` swap 立即被 worker 看見（原本 `from modules.rate_limiter import default_limiter` 會把老實例 bind 住）。`analyze_photo` 新增 `max_size` 參數（default 3072），把值傳給 `resize_for_api`。
+- **`modules/pipeline.py` / `modules/folder_watcher.py`** — 把 config 的 `image_max_size` 往下傳到 `analyze_photo`。watcher 每次 `_process_one` 重讀 config，所以設定變更即刻生效；pipeline 則在 `run_pipeline(image_max_size=...)` 入口接。
+- **`modules/config.py`** — `DEFAULT_CONFIG` 加 `rate_limit_rpm: 60` + `image_max_size: 3072`。
+- **`api/settings.py`** — 允許寫入 `rate_limit_rpm` (clamp `[1, 5000]`) + `image_max_size` (允許 `{1024, 1536, 2048, 3072}`，其他回 400)。當 `rate_limit_rpm` 改變時同步呼叫 `rate_limiter.configure()` live update。
+- **`web_ui.py` `_post_start_init`** — 載完 config 後呼叫 `rate_limiter.configure(cfg.rate_limit_rpm)` 套用使用者設定。
+- **Settings UI** — 新增兩個 section：
+  - **RATE LIMIT · 每分鐘請求數 (RPM)**：10-2000 slider + 直接輸入框（最高 5000）。LED 色隨值變化（綠→黃→紅）。下方動態描述：60 是免費方案上限、200 是付費起步、1500 是 flash-lite 常態、超過 1500 會建議先確認 API 配額。
+  - **IMAGE SIZE · 上傳長邊上限**：1024 / 1536 / 2048 / 3072 四選一按鈕卡片。下方動態描述：3072 細節最清楚、2048 減 45% input tokens、1536 減 75%、1024 減 90% 但小字會糊。
+
+### 可實測的收益（for 15 萬張 backlog 的使用者）
+- **速度**：RPM 60 → 2000，15 萬張 42h → **75 分鐘**
+- **成本**：image_max_size 3072 → 1536，input tokens 砍 **75%**（\$84 → \~\$22，~NT\$700）
+- 兩個都開，\~NT\$700 + 75 分鐘跑完。跑完開 PDF 報告看實際花了多少。
+
+### Tests
+- `test_throughput.py` — 13 個測試（rate_limiter configure clamp/idempotent/swap、analyze_photo max_size 流通、/api/settings PUT 驗證 RPM + image_max_size、invalid size 回 400）
+- **228 → 241 passed**（+13）
+
 ## v0.5.0 — 2026-04-18
 
 ### Cost visibility · 每張花費可見化

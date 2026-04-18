@@ -140,6 +140,69 @@
         </div>
       </section>
 
+      <!-- Throughput · RPM -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="rpm > 1500 ? 'led-error' : rpm > 200 ? 'led-warn' : 'led-accent'"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">RATE LIMIT · 每分鐘請求數 (RPM)</span>
+          </div>
+          <span class="font-mono text-lg font-semibold" :class="rpm > 1500 ? 'text-error' : rpm > 200 ? 'text-warning' : 'text-accent-violet'">{{ rpm }}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <input
+            v-model.number="rpm"
+            type="range"
+            min="10"
+            max="2000"
+            step="10"
+            @change="saveRpm"
+            class="flex-1 h-1 bg-surface-3 rounded appearance-none cursor-pointer accent-accent-violet [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-violet [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(155,123,255,0.6)]"
+          />
+          <input
+            v-model.number="rpm"
+            type="number"
+            min="1"
+            max="5000"
+            @change="saveRpm"
+            class="w-20 bg-surface-0 border border-border-default rounded px-2 py-1 text-sm font-mono text-text-primary focus:outline-none focus:border-accent-violet/60 text-right"
+          />
+        </div>
+        <div class="flex justify-between mt-1 font-mono text-[10px] text-text-tertiary">
+          <span>10</span><span>500</span><span>1000</span><span>1500</span><span>2000</span>
+        </div>
+        <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ rpmDescription }}</p>
+      </section>
+
+      <!-- Throughput · Image size -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="imageMaxSize < 1536 ? 'led-warn' : 'led-accent'"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">IMAGE SIZE · 上傳長邊上限</span>
+          </div>
+          <span class="font-mono text-[11px] text-accent-violet">{{ imageMaxSize }} px</span>
+        </div>
+        <div class="grid grid-cols-4 gap-2">
+          <button
+            v-for="size in [1024, 1536, 2048, 3072]"
+            :key="size"
+            @click="imageMaxSize = size; save({ image_max_size: size })"
+            class="relative rounded border p-2.5 text-left transition-colors"
+            :class="imageMaxSize === size
+              ? 'border-accent-violet/60 bg-accent-violet/5'
+              : 'border-border-default bg-surface-0 hover:border-border-strong'"
+          >
+            <div class="flex items-center justify-between">
+              <span class="font-mono text-sm font-semibold text-text-primary">{{ size }}</span>
+              <span v-if="imageMaxSize === size" class="led led-accent"></span>
+            </div>
+            <p class="text-[10px] text-text-tertiary mt-0.5">{{ imageSizeLabels[size] }}</p>
+          </button>
+        </div>
+        <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ imageSizeDescription }}</p>
+      </section>
+
       <!-- Concurrency -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5">
         <div class="flex items-center justify-between mb-3">
@@ -231,6 +294,15 @@ const machineName = ref('')
 const model = ref('lite')
 const concurrency = ref(1)
 const skipExisting = ref(false)
+const rpm = ref(60)
+const imageMaxSize = ref(3072)
+
+const imageSizeLabels = {
+  1024: '最省',
+  1536: '較省',
+  2048: '平衡',
+  3072: '最佳品質',
+}
 
 async function openExternal(url) {
   try {
@@ -262,6 +334,22 @@ const concurrencyDescription = computed(() => {
   return `同時分析 ${n} 張照片，大量佔用網路頻寬，建議在沒有其他人使用時才開啟`
 })
 
+const rpmDescription = computed(() => {
+  const n = rpm.value
+  if (n <= 60) return `每分鐘最多 ${n} 張 · 免費方案上限，安全值`
+  if (n <= 200) return `每分鐘最多 ${n} 張 · 適合付費方案的起步檔位`
+  if (n <= 1500) return `每分鐘最多 ${n} 張 · 付費方案 flash-lite 常態值，15 萬張約 ${Math.round(150000 / n)} 分鐘跑完`
+  return `每分鐘最多 ${n} 張 · 超過 1500 RPM 需確認 API 配額已升級，不然會 429 連發`
+})
+
+const imageSizeDescription = computed(() => {
+  const s = imageMaxSize.value
+  if (s >= 3072) return '3072px · 細節最清楚，描述品質最高，input tokens 也最多'
+  if (s >= 2048) return '2048px · 細節略減，input tokens 約減 45%'
+  if (s >= 1536) return '1536px · 大場景與人像仍清楚，input tokens 約減 75%'
+  return '1024px · 小字/遠景會糊，input tokens 約減 90%，僅推薦給大量歷史庫存補跑'
+})
+
 onMounted(async () => {
   await store.fetchSettings()
   model.value = store.settings.model || 'lite'
@@ -270,6 +358,10 @@ onMounted(async () => {
   concurrency.value = Math.min(10, Math.max(1, store.settings.watch_concurrency || store.settings.concurrency || 1))
   skipExisting.value = store.settings.skip_existing || false
   watchFolder.value = store.settings.watch_folder || ''
+  rpm.value = Math.min(5000, Math.max(1, store.settings.rate_limit_rpm || 60))
+  imageMaxSize.value = [1024, 1536, 2048, 3072].includes(store.settings.image_max_size)
+    ? store.settings.image_max_size
+    : 3072
 })
 
 async function saveApiKey() {
@@ -288,6 +380,12 @@ async function saveTesterInfo() {
     tester_name: testerName.value,
     machine_name: machineName.value,
   })
+}
+
+async function saveRpm() {
+  const v = Math.min(5000, Math.max(1, Number(rpm.value) || 60))
+  rpm.value = v
+  await store.updateSettings({ rate_limit_rpm: v })
 }
 
 async function saveConcurrency() {

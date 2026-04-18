@@ -79,9 +79,13 @@ def _post_start_init() -> None:
     surfaced its window (bundled path) or immediately (dev). secret_store
     also caps each Keychain call with a 2s timeout as a belt-and-braces."""
     from modules.config import load_config
+    from modules import rate_limiter
     cfg = load_config()
     if cfg.get("watch_folder"):
         register_allowed_root(cfg["watch_folder"])
+    # Apply user's throughput settings (v0.5.1+). Default is still 60 RPM if
+    # the key is absent from old configs.
+    rate_limiter.configure(int(cfg.get("rate_limit_rpm", 60)))
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         try:
             auto_start_watcher()

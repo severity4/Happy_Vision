@@ -11,7 +11,9 @@ from google.genai import types
 from PIL import Image
 
 from modules.logger import setup_logger
-from modules.rate_limiter import default_limiter
+# IMPORTANT: import the module, not the attribute — `configure()` swaps the
+# attribute at runtime and this keeps us binding to the current instance.
+from modules import rate_limiter
 
 log = setup_logger("gemini_vision")
 
@@ -34,8 +36,11 @@ MODEL_MAP = {
     "flash": "gemini-2.5-flash",
 }
 
-# Max long edge before sending to Gemini (matches AnyVision default)
-MAX_IMAGE_SIZE = 3072
+# Max long edge before sending to Gemini. Configurable at call time via
+# analyze_photo(max_size=...); the default 3072 matches the AnyVision baseline
+# and preserves description fidelity. Users can drop to 1536 / 1024 for
+# ~4x / ~9x fewer image input tokens at the cost of some detail.
+DEFAULT_MAX_IMAGE_SIZE = 3072
 
 # Disable all safety filters to avoid false blocks on event photos
 SAFETY_SETTINGS = [
@@ -95,7 +100,7 @@ Requirements:
 Respond ONLY with valid JSON matching the required schema."""
 
 
-def resize_for_api(photo_bytes: bytes, max_size: int = MAX_IMAGE_SIZE) -> bytes:
+def resize_for_api(photo_bytes: bytes, max_size: int = DEFAULT_MAX_IMAGE_SIZE) -> bytes:
     """Resize photo so the long edge is at most max_size pixels. Returns JPEG bytes."""
     img = Image.open(io.BytesIO(photo_bytes))
     w, h = img.size
@@ -166,15 +171,20 @@ def analyze_photo(
     api_key: str,
     model: str = "lite",
     max_retries: int = 3,
+    max_size: int = DEFAULT_MAX_IMAGE_SIZE,
 ) -> tuple[dict | None, dict | None]:
     """Analyze a single photo with Gemini API.
+
+    `max_size` is the long-edge pixel cap sent to Gemini after resize. Smaller
+    = fewer image tiles = cheaper and faster, at the cost of some description
+    detail. Callers typically read this from config.image_max_size.
 
     Returns (parsed_result, usage) on success, (None, None) on failure.
     `usage` is {"input_tokens", "output_tokens", "total_tokens", "model"}.
     """
     model_name = MODEL_MAP.get(model, MODEL_MAP["lite"])
     photo_bytes = Path(photo_path).read_bytes()
-    photo_bytes = resize_for_api(photo_bytes)
+    photo_bytes = resize_for_api(photo_bytes, max_size=max_size)
     prompt = build_prompt()
 
     client = _get_client(api_key)
@@ -182,7 +192,9 @@ def analyze_photo(
     # Global rate limit (shared by pipeline workers and folder watcher).
     # 60s cap lets cancel/shutdown propagate instead of blocking forever if
     # the token bucket is misconfigured or contended beyond patience.
-    if not default_limiter.acquire(timeout=60):
+    # Read `default_limiter` via the module so runtime `configure()` swaps
+    # take effect on subsequent calls.
+    if not rate_limiter.default_limiter.acquire(timeout=60):
         log.warning("Rate limiter timeout for %s — giving up", photo_path)
         return None, None
 

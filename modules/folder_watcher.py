@@ -367,7 +367,10 @@ class FolderWatcher:
             model = config.get("model", "lite")
 
             analysis_started = time.perf_counter()
-            result, usage = analyze_photo(photo_path, api_key=api_key, model=model)
+            image_max_size = int(config.get("image_max_size", 3072))
+            result, usage = analyze_photo(
+                photo_path, api_key=api_key, model=model, max_size=image_max_size
+            )
             analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
 
             cost_usd = None

@@ -24,6 +24,12 @@ DEFAULT_CONFIG = {
     "watch_enabled": False,
     "watch_concurrency": 1,
     "watch_interval": 10,
+    # Throughput tuning (v0.5.1+) — both have safe defaults matching the
+    # Gemini free-tier posture. Users on paid tiers can raise rate_limit_rpm
+    # (up to 2000 for flash-lite) and drop image_max_size for faster, cheaper
+    # runs at the cost of some description detail.
+    "rate_limit_rpm": 60,
+    "image_max_size": 3072,
 }
 
 

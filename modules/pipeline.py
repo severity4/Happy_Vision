@@ -78,6 +78,7 @@ def run_pipeline(
     db_path: Path | str | None = None,
     callbacks: PipelineCallbacks | None = None,
     state: PipelineState | None = None,
+    image_max_size: int = 3072,
 ) -> list[dict]:
     """Run the full analysis pipeline on a folder of photos.
     Pass a PipelineState to control pause/cancel from outside."""
@@ -133,7 +134,7 @@ def run_pipeline(
             return None
 
         analysis_started = time.perf_counter()
-        result, usage = analyze_photo(photo_path, api_key=api_key, model=model)
+        result, usage = analyze_photo(photo_path, api_key=api_key, model=model, max_size=image_max_size)
         analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
 
         cost_usd = None
