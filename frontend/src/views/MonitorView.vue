@@ -69,10 +69,10 @@
         >
           + 加入資料夾
         </button>
-        <a href="/api/export/pdf" class="bg-accent-violet/10 hover:bg-accent-violet/20 border border-accent-violet/30 text-accent-violet font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">PDF 報告</a>
-        <a href="/api/export/csv" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">CSV</a>
-        <a href="/api/export/json" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">JSON</a>
-        <a href="/api/export/diagnostics" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">診斷</a>
+        <a :href="exportUrl('pdf')" class="bg-accent-violet/10 hover:bg-accent-violet/20 border border-accent-violet/30 text-accent-violet font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">PDF 報告</a>
+        <a :href="exportUrl('csv')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">CSV</a>
+        <a :href="exportUrl('json')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">JSON</a>
+        <a :href="exportUrl('diagnostics')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">診斷</a>
       </div>
     </section>
 
@@ -444,6 +444,14 @@ async function onRetried(payload) {
 
 const timeTick = ref(0)
 let tickTimer = null
+
+// Export links are plain <a> navigations, which bypass the fetch()
+// interceptor in main.js that normally injects X-HV-Token. Append the
+// token as a query param (same mechanism auth.py uses for SSE).
+const exportUrl = (kind) => {
+  const token = window.__HV_TOKEN__ || ''
+  return `/api/export/${kind}?token=${encodeURIComponent(token)}`
+}
 
 const hasApiKey = computed(() => !!settingsStore.settings.gemini_api_key_set)
 const configuredFolder = computed(() => settingsStore.settings.watch_folder || '')
