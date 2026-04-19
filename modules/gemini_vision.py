@@ -8,7 +8,7 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from modules.logger import setup_logger
 # IMPORTANT: import the module, not the attribute — `configure()` swaps the
@@ -183,8 +183,25 @@ def analyze_photo(
     `usage` is {"input_tokens", "output_tokens", "total_tokens", "model"}.
     """
     model_name = MODEL_MAP.get(model, MODEL_MAP["lite"])
-    photo_bytes = Path(photo_path).read_bytes()
-    photo_bytes = resize_for_api(photo_bytes, max_size=max_size)
+
+    # Read + decode BEFORE touching Gemini. A corrupt/0-byte/truncated
+    # JPG would otherwise crash the worker thread because PIL raises
+    # UnidentifiedImageError (or OSError on truncation) inside resize_for_api,
+    # which then propagates via future.result() and kills the whole batch.
+    # Guard at the boundary so one bad file skips cleanly.
+    try:
+        photo_bytes = Path(photo_path).read_bytes()
+    except OSError as e:
+        log.error("Cannot read %s: %s", photo_path, e)
+        return None, None
+
+    try:
+        photo_bytes = resize_for_api(photo_bytes, max_size=max_size)
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as e:
+        log.warning("Corrupt or unreadable image %s (%s); skipping",
+                    photo_path, type(e).__name__)
+        return None, None
+
     prompt = build_prompt()
 
     client = _get_client(api_key)
