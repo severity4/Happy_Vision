@@ -6,11 +6,14 @@ populated from Keychain for backward compatibility with callers.
 """
 
 import json
+import logging
 import os
 import platform
 from pathlib import Path
 
 from modules import secret_store
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "tester_name": "",
@@ -61,16 +64,24 @@ def get_config_dir() -> Path:
 
 def load_config() -> dict:
     """Load config; merge API key from Keychain. Migrates legacy plaintext
-    key out of config.json on first encounter."""
+    key out of config.json on first encounter.
+
+    Corruption policy: if config.json exists but can't be parsed (invalid
+    JSON, empty file, non-object root), we fall back to DEFAULT_CONFIG and
+    quarantine the bad file to `config.json.bad` so the user can inspect
+    what they typed wrong. This makes the app bulletproof against a single
+    manual-edit typo — previous behaviour crashed the whole startup."""
     config_path = get_config_dir() / "config.json"
     config = dict(DEFAULT_CONFIG)
     legacy_key = None
 
     if config_path.exists():
-        with open(config_path) as f:
-            stored = json.load(f)
-        legacy_key = stored.pop("gemini_api_key", None)
-        config.update(stored)
+        stored = _safe_load_json(config_path)
+        if isinstance(stored, dict):
+            legacy_key = stored.pop("gemini_api_key", None)
+            config.update(stored)
+        # If _safe_load_json returned None, we've already quarantined
+        # the bad file and will proceed with defaults.
 
     # Migration: if JSON had a plaintext key, ensure Keychain has it and
     # scrub the JSON. If Keychain already has a (possibly different) key,
@@ -85,6 +96,42 @@ def load_config() -> dict:
 
     config["gemini_api_key"] = keychain_key
     return config
+
+
+def _safe_load_json(path: Path) -> dict | None:
+    """Return parsed JSON dict, or None on parse failure / non-dict root.
+
+    On failure we rename the bad file to `<name>.bad` so (a) the user can
+    recover hand-typed credentials, (b) the next save_config() writes a
+    clean file instead of the caller wondering why their manually-edited
+    entries disappeared. Never deletes data."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        _quarantine(path, reason=f"parse error: {e}")
+        return None
+
+    if not isinstance(data, dict):
+        _quarantine(path, reason=f"root must be object, got {type(data).__name__}")
+        return None
+
+    return data
+
+
+def _quarantine(path: Path, reason: str) -> None:
+    """Rename a bad config file to `<name>.bad`. Idempotent: if a `.bad`
+    already exists, overwrite it (the newest corruption is the most useful
+    for debugging; older .bad files likely came from the same edit)."""
+    bad = path.with_suffix(path.suffix + ".bad")
+    try:
+        if bad.exists():
+            bad.unlink()
+        path.rename(bad)
+        log.warning("config.json unparseable (%s); quarantined to %s and "
+                    "continuing with defaults.", reason, bad)
+    except OSError as e:
+        log.error("Could not quarantine bad config at %s: %s", path, e)
 
 
 def save_config(config: dict) -> None:
