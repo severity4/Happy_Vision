@@ -128,15 +128,34 @@
       </router-view>
     </main>
 
+    <!-- First-run onboarding (3-step wizard). Opens automatically when
+         the user has no API key AND no watch folder, and hasn't dismissed
+         before. Also triggerable from Settings' "再跑一次引導". -->
+    <OnboardingWizard
+      :force="forceOnboarding"
+      @close="forceOnboarding = false"
+    />
+
     <!-- Global toast container for save feedback + errors -->
     <ToastHost />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, provide } from 'vue'
 import { useWatchStore } from './stores/watch'
+import { useSettingsStore } from './stores/settings'
 import ToastHost from './components/ToastHost.vue'
+import OnboardingWizard from './components/OnboardingWizard.vue'
+
+const settingsStore = useSettingsStore()
+const forceOnboarding = ref(false)
+
+// Settings page's "再跑一次引導" button calls this to force the wizard back on.
+provide('triggerOnboarding', () => {
+  localStorage.removeItem('hv_onboarding_dismissed')
+  forceOnboarding.value = true
+})
 
 const watchStore = useWatchStore()
 
@@ -297,6 +316,12 @@ onMounted(async () => {
     const res = await fetch('/api/health')
     const data = await res.json()
     version.value = data.version || ''
+  } catch {}
+
+  // Pre-load settings so the onboarding wizard knows whether to auto-open
+  // on first launch (it gates on `settings.loaded`).
+  try {
+    await settingsStore.fetchSettings()
   } catch {}
 
   watchStore.init()

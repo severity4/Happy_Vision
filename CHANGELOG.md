@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.8.1 — 2026-04-19 · Onboarding Wizard（first-run 三步引導）
+
+UX Researcher 早先指出的 P0 是「首次開 app 落在空白監控頁，設定頁 8 個 section 不知從何下手」。之前一直沒補，這版補上。
+
+### 行為
+首次啟動時（沒 API key **且** 沒監控資料夾、且 localStorage 沒標記過「已跳過」），自動跳出覆蓋式對話框：
+
+1. **Step 1 — API Key**：貼入 `AIzaSy...`，點「儲存並繼續」→ 寫 Keychain + 下一步
+2. **Step 2 — 監控資料夾**：用 folder picker 選資料夾，顯示每層子資料夾的 JPG 數，點「選擇此資料夾」→ 寫 config + 下一步
+3. **Step 3 — 準備好了**：顯示已設定摘要（API Key 已設 · 資料夾 · Flash Lite · Dedup 開啟），點「▶ 開始監控」→ 直接啟動 watcher，關閉 wizard
+
+任何一步都可以「跳過引導」或「之後再...」關閉，`localStorage.hv_onboarding_dismissed=1` 之後不再自動開。
+
+### 聰明跳步
+如果半途 quit 再開（例如已填 API key 但沒選資料夾），重開時會自動跳到 Step 2，不會重新要你貼 key。
+
+### 重新觸發
+**設定 → 開發者工具 → ONBOARDING · 首次設定引導 → 再跑一次**。會清 localStorage flag 並強制開 wizard。
+
+### 實作
+- `components/OnboardingWizard.vue`：單一組件，內部有 3 個 step section + 本地 folder picker（重用 `/api/browse` 端點）
+- `App.vue` 掛上，`onMounted` pre-load settings 讓 wizard 有 `settings.loaded` 當前提
+- `provide('triggerOnboarding')` inject 到 SettingsView 的「再跑一次」按鈕
+
+### 不 ship 的錯
+- 目前不驗證 API key 是否真的有效（打 Gemini 一次驗證太貴，留到之後加）
+- Step 2 folder picker 起點是預設 home；P1 的「最近監控 / 桌面 / 下載 / LucidLink」快捷還沒做
+
 ## v0.8.0 — 2026-04-19 · Lightroom Rating 預篩
 
 ### 🎯 新功能：依 Lightroom 星等過濾，不處理 reject 跟未評分

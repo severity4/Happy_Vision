@@ -337,6 +337,23 @@
 
       <template v-if="showDeveloper">
 
+      <!-- Re-run onboarding -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="led"></span>
+            <div>
+              <span class="kicker" style="color: var(--color-text-primary)">ONBOARDING · 首次設定引導</span>
+              <p class="text-[11px] text-text-tertiary mt-1">忘了當初跳過了什麼？重新跑一次 3 步引導</p>
+            </div>
+          </div>
+          <button
+            @click="retriggerOnboarding"
+            class="bg-surface-3 hover:bg-surface-4 text-text-primary font-mono text-[11px] tracking-wider px-4 py-2 rounded transition-colors"
+          >再跑一次</button>
+        </div>
+      </section>
+
       <!-- Tester identity -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5">
         <div class="flex items-center gap-2 mb-3">
@@ -370,10 +387,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import { useWatchStore } from '../stores/watch'
 import { pushToast } from '../utils/toast.js'
+
+// Provided by App.vue — opens the onboarding wizard on demand.
+const triggerOnboarding = inject('triggerOnboarding', () => {})
+
+function retriggerOnboarding() {
+  triggerOnboarding()
+}
 
 const store = useSettingsStore()
 const watchStore = useWatchStore()
