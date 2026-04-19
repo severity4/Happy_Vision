@@ -82,6 +82,48 @@ def compute_phash_from_bytes(photo_bytes: bytes) -> str:
 
 # ---- Compare ----
 
+def prefix16(phash: str) -> int | None:
+    """First 16 bits of the 64-bit dhash as an integer, for SQLite bucketing.
+
+    v0.12.0: `result_store.find_similar` used to LIMIT 5000 recent rows as
+    an O(n) speed cap. At 150k photos this meant anything >5000 rows back
+    was invisible to dedup — if today's burst resembles last month's, we'd
+    miss and pay Gemini twice.
+
+    Indexing by 16-bit prefix narrows the candidate set from "recent 5000"
+    to "rows with matching prefix OR prefix within 1-bit flip". For a
+    uniformly-distributed hash at 150k rows, each prefix bucket averages
+    150000/65536 ≈ 2-3 rows — essentially a point lookup.
+
+    Trade-off: two near-duplicates with Hamming distance ≤5 can in theory
+    land in different prefix buckets if the bit differences cluster in the
+    first 16 bits. To compensate, find_similar also probes the 16 single-
+    bit-flip neighbours of the target prefix, catching the common case.
+    Remaining recall gap is bounded and acceptable for a heuristic dedup.
+    """
+    if not phash or len(phash) < 4:
+        return None
+    try:
+        return int(phash[:4], 16)
+    except (ValueError, TypeError):
+        return None
+
+
+def prefix_neighbours(prefix: int, max_flips: int = 1) -> list[int]:
+    """Return the candidate 16-bit prefix bucket(s) to probe for near-dupes.
+
+    With max_flips=1 that's the prefix itself + 16 single-bit-flip
+    variants = 17 buckets. Sum of candidate rows scanned is ~17 × average
+    bucket size = manageable at 150k rows."""
+    if prefix is None:
+        return []
+    out = [prefix]
+    if max_flips >= 1:
+        for bit in range(16):
+            out.append(prefix ^ (1 << bit))
+    return out
+
+
 def hamming_distance(hash_a: str, hash_b: str) -> int:
     """Bit-level distance between two hex pHashes. 0 = identical, 64 = max."""
     if not hash_a or not hash_b:

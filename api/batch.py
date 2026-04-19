@@ -193,11 +193,17 @@ def submit_batch():
         # Code review: 402 Payment Required is historically unused and many
         # proxies/clients mishandle it. Use 403 with a stable error_code
         # the frontend branches on.
-        return jsonify({
+        # v0.12.0 partial_summary: if earlier chunks succeeded before the
+        # tier wall hit, surface them so the UI can show "4 chunks already
+        # live — cancel them or fix billing and resubmit the rest".
+        body = {
             "error": "tier_required",
             "message": str(e),
             "billing_url": gemini_batch.BILLING_URL,
-        }), 403
+        }
+        if hasattr(e, "partial_summary"):
+            body["partial_summary"] = e.partial_summary
+        return jsonify(body), 403
     except Exception as e:  # noqa: BLE001
         log.exception("Batch submit failed")
         return jsonify({"error": "submit_failed", "message": str(e)}), 500

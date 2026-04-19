@@ -88,12 +88,18 @@ class ResultStore:
             # near-duplicate without a fresh Gemini call.
             ("phash", "TEXT"),
             ("duplicate_of", "TEXT"),
+            # v0.12.0: first 16 bits of phash as int. Lets find_similar do
+            # a prefix-bucket lookup instead of a LIMIT 5000 recent scan,
+            # which capped dedup recall at 15万-photo scale. See
+            # modules/phash.prefix16 for the trade-off.
+            ("phash_prefix", "INTEGER"),
         ]:
             try:
                 self.conn.execute(f"ALTER TABLE results ADD COLUMN {col} {coltype}")
             except sqlite3.OperationalError:
                 pass
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_phash ON results(phash)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_phash_prefix ON results(phash_prefix)")
 
         # v0.9.0: Gemini Batch API job tracking. One row per submitted batch
         # job, one row per (job, request_key) in batch_items so we can map
@@ -160,13 +166,16 @@ class ResultStore:
     ) -> None:
         now = datetime.now().isoformat()
         usage = usage or {}
+        # Compute 16-bit prefix for the bucket index. Cheap (4-char parse).
+        from modules.phash import prefix16
+        phash_prefix = prefix16(phash) if phash else None
         with self._lock:
             self.conn.execute(
                 """INSERT OR REPLACE INTO results
                    (file_path, status, result_json, input_tokens, output_tokens,
-                    total_tokens, cost_usd, model, phash, duplicate_of,
-                    created_at, updated_at)
-                   VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    total_tokens, cost_usd, model, phash, phash_prefix,
+                    duplicate_of, created_at, updated_at)
+                   VALUES (?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_path,
                     json.dumps(result, ensure_ascii=False),
@@ -176,6 +185,7 @@ class ResultStore:
                     cost_usd,
                     usage.get("model"),
                     phash,
+                    phash_prefix,
                     duplicate_of,
                     now,
                     now,
@@ -191,20 +201,50 @@ class ResultStore:
         match within `threshold` bits, resolved to the underlying master row
         (so dup chains don't compound). Returns None if nothing is close.
 
+        v0.12.0 scale change: the v0.6.x implementation did
+        `ORDER BY updated_at DESC LIMIT 5000` which meant any dedup candidate
+        older than the last 5000 rows was invisible — fine at 10k photos,
+        broken at 150k. This version uses the `phash_prefix` bucket index
+        plus its single-bit-flip neighbours, which handles the common case
+        at 150k scale. Falls back to the recent-rows scan for legacy rows
+        without a prefix populated.
+
         Performance: the candidate scan selects only (file_path, phash) —
         the result_json column can be 1-3 KB per row and fetching it for
         every candidate amplifies I/O by ~100x on big DBs. We only load
         the master's JSON after we've picked a match.
         """
-        from modules.phash import find_closest
-        rows = self.conn.execute(
-            """SELECT file_path, phash
-               FROM results
-               WHERE status = 'completed' AND phash IS NOT NULL
-               ORDER BY updated_at DESC LIMIT ?""",
-            (limit,),
-        ).fetchall()
-        candidates = [(r["file_path"], r["phash"]) for r in rows]
+        from modules.phash import find_closest, prefix16, prefix_neighbours
+        candidates: list[tuple[str, str]] = []
+        target_prefix = prefix16(target_phash)
+        if target_prefix is not None:
+            buckets = prefix_neighbours(target_prefix, max_flips=1)
+            placeholders = ",".join("?" * len(buckets))
+            bucket_rows = self.conn.execute(
+                f"""SELECT file_path, phash
+                    FROM results
+                    WHERE status = 'completed'
+                      AND phash IS NOT NULL
+                      AND phash_prefix IN ({placeholders})
+                    LIMIT ?""",
+                (*buckets, limit),
+            ).fetchall()
+            candidates = [(r["file_path"], r["phash"]) for r in bucket_rows]
+
+        # Fallback: if bucket query returned nothing (e.g. legacy rows lack
+        # phash_prefix because they were saved before v0.12.0), widen to
+        # the historical recent-rows scan so we don't regress on old data.
+        if not candidates:
+            rows = self.conn.execute(
+                """SELECT file_path, phash
+                   FROM results
+                   WHERE status = 'completed' AND phash IS NOT NULL
+                     AND phash_prefix IS NULL
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            candidates = [(r["file_path"], r["phash"]) for r in rows]
+
         match = find_closest(target_phash, candidates, threshold)
         if match is None:
             return None
@@ -290,6 +330,49 @@ class ResultStore:
             (file_path,),
         ).fetchone()
         return row is not None
+
+    def get_failed_results(self, folder: str | None = None, limit: int = 1000) -> list[dict]:
+        """Return rows whose analysis failed. Used by the Monitor 'retry failed'
+        UI to let the user re-enqueue without hunting through the DB.
+
+        If `folder` is provided, only failures under that root are returned
+        (matched against both raw and symlink-resolved prefix, same trick as
+        `get_results_for_folder`)."""
+        if folder:
+            raw = str(Path(folder))
+            resolved = str(Path(folder).resolve())
+            rows = self.conn.execute(
+                """SELECT file_path, error_message, updated_at
+                   FROM results
+                   WHERE status = 'failed'
+                     AND (file_path LIKE ? OR file_path LIKE ?)
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (raw + "%", resolved + "%", limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT file_path, error_message, updated_at
+                   FROM results WHERE status = 'failed'
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_failed(self, file_paths: list[str]) -> int:
+        """Remove `status='failed'` rows so they get re-processed on next run.
+        Returns the number of rows affected. Used before re-enqueuing a
+        retry so `skip_existing` logic re-picks them up."""
+        if not file_paths:
+            return 0
+        placeholders = ",".join("?" * len(file_paths))
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                f"DELETE FROM results WHERE status = 'failed' AND file_path IN ({placeholders})",
+                tuple(file_paths),
+            )
+            self.conn.commit()
+            return cur.rowcount
 
     def mark_failed(self, file_path: str, error_message: str) -> None:
         now = datetime.now().isoformat()

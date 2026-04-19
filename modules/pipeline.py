@@ -240,9 +240,17 @@ def submit_batch_run(
     """Scan `folder`, chunk into batch jobs, submit each to Gemini Batch API,
     persist metadata, and return a summary.
 
-    Returns {jobs: [{job_id, photo_count, payload_bytes, ...}],
-             total_photos, skipped, chunks}.
-    Raises gemini_batch.TierRequiredError when a free-tier account tries."""
+    Returns {jobs: [...], total_photos, skipped, chunks,
+             partial_failure: bool, failed_chunk_index: int | None,
+             error: str | None}.
+
+    v0.12.0 partial-chunk rollback policy (code review MEDIUM): if chunk N
+    fails mid-run, earlier chunks 1..N-1 are already live at Gemini (and
+    costing money). We DON'T try to cancel them — the user can see them in
+    BatchJobsPanel and decide. But we DO stop submitting further chunks
+    and return a summary that surfaces the failure so the caller can show
+    "submitted 4/50 then TIER_REQUIRED — cancel those 4 or fix billing
+    and resubmit the rest" instead of a silent 500."""
     photos = scan_photos(folder)
     store = ResultStore(db_path)
     try:
@@ -252,10 +260,17 @@ def submit_batch_run(
             to_process = photos
         skipped = len(photos) - len(to_process)
         if not to_process:
-            return {"jobs": [], "total_photos": 0, "skipped": skipped, "chunks": 0}
+            return {
+                "jobs": [], "total_photos": 0, "skipped": skipped, "chunks": 0,
+                "partial_failure": False, "failed_chunk_index": None, "error": None,
+            }
 
         chunks = gemini_batch.chunk_photos(to_process, gemini_batch.MAX_PHOTOS_PER_BATCH)
-        jobs_meta = []
+        jobs_meta: list[dict] = []
+        tier_error: gemini_batch.TierRequiredError | None = None
+        fail_idx: int | None = None
+        fail_err: str | None = None
+
         for idx, chunk in enumerate(chunks, start=1):
             jsonl_path, key_map, payload_bytes = gemini_batch.build_jsonl_for_chunk(
                 chunk, model=model, max_size=image_max_size,
@@ -287,6 +302,28 @@ def submit_batch_run(
                     "Submitted batch %s: %d photos (chunk %d/%d)",
                     submit.job_id, len(key_map), idx, len(chunks),
                 )
+            except gemini_batch.TierRequiredError as e:
+                # Tier issue won't fix itself on retry. Stop submitting
+                # immediately so the user doesn't get billed further.
+                log.error(
+                    "Tier error at chunk %d/%d, halting further submits. %d chunks already live.",
+                    idx, len(chunks), len(jobs_meta),
+                )
+                tier_error = e
+                fail_idx = idx
+                fail_err = str(e)
+                break
+            except Exception as e:  # noqa: BLE001
+                # Transient error on a single chunk — stop submitting so we
+                # don't cascade a network blip into 50 failed uploads.
+                # Earlier chunks continue running at Gemini.
+                log.exception(
+                    "Chunk %d/%d failed: %s. Halting; %d chunks already live.",
+                    idx, len(chunks), e, len(jobs_meta),
+                )
+                fail_idx = idx
+                fail_err = f"{type(e).__name__}: {e}"
+                break
             finally:
                 # Always clean the local JSONL — it's 100MB+ of base64 we don't
                 # need on disk after upload. Ignore missing-file races.
@@ -294,12 +331,25 @@ def submit_batch_run(
                     os.unlink(jsonl_path)
                 except OSError:
                     pass
-        return {
+
+        summary = {
             "jobs": jobs_meta,
-            "total_photos": len(to_process),
+            "total_photos": sum(j["photo_count"] for j in jobs_meta),
             "skipped": skipped,
-            "chunks": len(chunks),
+            "chunks": len(jobs_meta),
+            "planned_chunks": len(chunks),
+            "partial_failure": fail_idx is not None,
+            "failed_chunk_index": fail_idx,
+            "error": fail_err,
         }
+        if tier_error is not None:
+            # Preserve the callable's expected contract: raising so the
+            # HTTP layer can still route to the 403 tier_required response.
+            # But attach the partial summary so the caller can surface
+            # "N chunks already submitted before you hit the tier wall".
+            tier_error.partial_summary = summary
+            raise tier_error
+        return summary
     finally:
         store.close()
 

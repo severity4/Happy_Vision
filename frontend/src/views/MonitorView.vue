@@ -161,7 +161,13 @@
           <div class="h-full bg-success transition-all duration-500" :style="{ width: doneWidth + '%' }"></div>
         </div>
       </div>
-      <div class="border border-border-default bg-surface-1 rounded-md p-3">
+      <button
+        type="button"
+        @click="openFailedModal"
+        :disabled="watchStore.failedToday === 0"
+        class="text-left w-full border border-border-default bg-surface-1 rounded-md p-3 transition-colors hover:border-warning/50 disabled:cursor-default disabled:hover:border-border-default"
+        :title="watchStore.failedToday > 0 ? '點擊查看 / 重試失敗的照片' : '目前沒有失敗的照片'"
+      >
         <div class="flex items-center justify-between">
           <span class="kicker">FAIL · 今日失敗</span>
           <span class="led" :class="watchStore.failedToday > 0 ? 'led-error' : ''"></span>
@@ -170,7 +176,10 @@
         <div class="h-0.5 bg-surface-3 mt-2 rounded overflow-hidden">
           <div class="h-full bg-error transition-all duration-500" :style="{ width: failRatio + '%' }"></div>
         </div>
-      </div>
+        <div v-if="watchStore.failedToday > 0" class="font-mono text-[10px] text-warning mt-1">
+          點擊查看 / 重試 →
+        </div>
+      </button>
       <div class="border border-border-default bg-surface-1 rounded-md p-3">
         <div class="flex items-center justify-between">
           <span class="kicker">COST · 今日花費</span>
@@ -387,6 +396,14 @@
 
     <!-- v0.9.0: Async Batch API jobs, if any are in flight or recently finished. -->
     <BatchJobsPanel />
+
+    <!-- v0.12.0: retry failed photos modal. Opened from the FAIL stat card. -->
+    <FailedRetryModal
+      :open="failedModalOpen"
+      :folder="configuredFolder || watchStore.folder || ''"
+      @close="failedModalOpen = false"
+      @retried="onRetried"
+    />
   </div>
 </template>
 
@@ -395,7 +412,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useWatchStore } from '../stores/watch'
 import { useSettingsStore } from '../stores/settings'
 import { humanizeError } from '../utils/errors.js'
+import { pushToast } from '../utils/toast.js'
 import BatchJobsPanel from '../components/BatchJobsPanel.vue'
+import FailedRetryModal from '../components/FailedRetryModal.vue'
 
 const watchStore = useWatchStore()
 const settingsStore = useSettingsStore()
@@ -410,6 +429,18 @@ const enqueueResult = ref(null)
 const selected = ref(null)
 const detailData = ref(null)
 const detailLoading = ref(false)
+
+// v0.12.0: retry-failed modal state
+const failedModalOpen = ref(false)
+function openFailedModal() {
+  if (watchStore.failedToday === 0) return
+  failedModalOpen.value = true
+}
+async function onRetried(payload) {
+  // Refresh stats so FAIL card updates immediately. watchStore.fetchStatus
+  // reads today's completed/failed/cost counts from the DB.
+  await watchStore.fetchStatus()
+}
 
 const timeTick = ref(0)
 let tickTimer = null

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.12.0 — 2026-04-19 · Scale hardening(pre-4/23 production run 備戰)
+
+4/23 要上 15 萬張生產級 batch。這版把 audit 找到還沒處理的 MEDIUM 項目全部清掉:DB scale、partial-chunk rollback、retry UI。
+
+### D) pHash prefix bucket — 15 萬張 dedup 不退化
+v0.6.x 的 `find_similar` 用 `LIMIT 5000 ORDER BY updated_at DESC` 當速度 cap。10k 張照片時沒事,150k 張時「超過 5000 rows 之前的就找不到」—— 新 burst 跟舊 burst 重複時 dedup 失效。
+- 新欄位 `phash_prefix INTEGER`(16-bit 前綴)+ index
+- `find_similar` 先用 `phash_prefix IN (target + 16 個 single-bit 鄰居)` 縮候選,再 Hamming
+- Legacy 無 prefix 的 row 走 fallback 保證不回歸
+- `modules/phash.prefix16()` + `prefix_neighbours()` 工具函數
+- 在 200 rows 混合 prefix 的測試下找到 Hamming 3 的 master
+
+### E) submit_batch_run partial-chunk rollback — 50 chunks 中途掛不撕裂
+送到第 5 chunk 打到 tier_required 或 transient error,chunks 1-4 已經在 Gemini 跑了,之前會讓 exception 直接爆、使用者不知道已經扣多少錢。現在:
+- 任何 chunk 失敗 → 立刻停送(不浪費 budget)
+- summary 多回 `partial_failure, failed_chunk_index, planned_chunks, error`
+- TierRequiredError 附 `partial_summary` 在 exception 上,API 層包成 403 + `partial_summary` 欄位
+- UI 可以說「已送 4/50,點此取消已送的 / 修好 billing 再送剩下 46」
+
+### B) Failed photos retry UI
+Monitor 頁「FAIL · 今日失敗」card 變成可點按鈕。點開 modal 顯示失敗清單(檔名 + humanised error + 時間),「🔁 重試全部 N 張」一鍵清除失敗標記 → 下次分析自動重跑。
+- Backend: `GET /api/results/failed?folder=...` + `POST /api/results/retry { file_paths / folder }`
+- `modules/result_store.get_failed_results()` + `clear_failed()`
+- Frontend: `components/FailedRetryModal.vue`
+- 重試後自動 `watchStore.fetchStatus()` 刷新 FAIL 計數
+
+### 測試
+- `tests/test_phash_prefix.py` 8 tests(prefix16 / neighbours / bucket match / single-bit-flip / legacy fallback / threshold)
+- `tests/test_batch_partial_rollback.py` 3 tests(happy path、tier error 中斷 + partial_summary、transient error summary)
+- `tests/test_retry_failed.py` 10 tests(get / clear / folder filter / API happy paths / 400 無輸入)
+- 377 passing(v0.11.0 是 356,+21 新)
+
 ## v0.11.0 — 2026-04-19 · Observability + zombie detection(SRE audit 剩下的 HIGH)
 
 v0.10.1 修了 CRITICAL/HIGH 的前半:安全 + idempotency。這版收尾 SRE audit 的後半:監控的可觀測性 + 殭屍 job 處理 + 背壓改善。

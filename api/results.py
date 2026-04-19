@@ -16,6 +16,47 @@ def get_results():
     return jsonify({"results": results, "summary": summary})
 
 
+@results_bp.route("/failed", methods=["GET"])
+def list_failed():
+    """List photos whose analysis failed, for the Monitor 'retry failed' UI.
+
+    Optional query param `folder` restricts to one root. This is so the
+    user can say "retry the 23 failures under LucidLink/WeddingA" without
+    accidentally re-enqueuing failures from a different project.
+    """
+    folder = request.args.get("folder", "").strip() or None
+    limit = max(1, min(5000, int(request.args.get("limit", 1000))))
+    with ResultStore() as store:
+        items = store.get_failed_results(folder=folder, limit=limit)
+    return jsonify({"count": len(items), "items": items})
+
+
+@results_bp.route("/retry", methods=["POST"])
+def retry_failed():
+    """Clear the 'failed' marker on the specified files so the next analysis
+    run (realtime or batch, whatever the user has configured) picks them up.
+
+    Client passes `{"file_paths": ["/a.jpg", "/b.jpg"]}` OR `{"folder": ".."}`
+    to retry every failure under a folder. Returns count cleared + the
+    folder the caller should kick off next (convenience so the UI can chain
+    this into a submit or watch-enqueue call)."""
+    data = request.get_json(silent=True) or {}
+    file_paths = data.get("file_paths")
+    folder = (data.get("folder") or "").strip() or None
+    with ResultStore() as store:
+        if not file_paths and folder:
+            items = store.get_failed_results(folder=folder, limit=5000)
+            file_paths = [it["file_path"] for it in items]
+        if not file_paths:
+            return jsonify({"error": "no failures to retry"}), 400
+        cleared = store.clear_failed(file_paths)
+    return jsonify({
+        "cleared": cleared,
+        "file_paths": file_paths,
+        "folder": folder,
+    })
+
+
 @results_bp.route("/<path:file_path>", methods=["GET"])
 def get_result(file_path):
     with ResultStore() as store:
