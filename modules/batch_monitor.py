@@ -205,8 +205,12 @@ class BatchMonitor:
                     "failed": failed,
                     "total": job_row["photo_count"],
                 })
-            store.update_batch_job_status(
-                job_id, job_row["status"],  # keep current status
+            # Only update counters — the terminal state was already written
+            # by _poll_one before we were called. Writing status here with
+            # job_row["status"] (stale) used to regress SUCCEEDED back to the
+            # pre-poll state. This was caught by external review 2026-04-19.
+            store.update_batch_job_counts(
+                job_id,
                 completed_count=completed,
                 failed_count=failed,
             )

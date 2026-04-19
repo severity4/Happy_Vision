@@ -101,6 +101,35 @@ def test_mark_batch_item_updates_only_target(store):
     assert by_key["p00001"] == "pending"
 
 
+def test_update_batch_job_counts_preserves_status(store):
+    """Regression (v0.9.0 → v0.9.1): the batch monitor used to call
+    update_batch_job_status(job_id, job_row['status'], ...) after the poll
+    loop had already written a terminal state. Because job_row was stale,
+    the terminal state got overwritten with the pre-poll value.
+    update_batch_job_counts must only touch counters, never status."""
+    store.create_batch_job(
+        job_id="batches/regress",
+        folder="/tmp",
+        model="lite",
+        items=[("p0", "/tmp/a.jpg"), ("p1", "/tmp/b.jpg")],
+        input_file_id="files/x",
+        payload_bytes=1,
+    )
+    # Simulate the poll loop transitioning to SUCCEEDED (with completed_at).
+    store.update_batch_job_status("batches/regress", "JOB_STATE_SUCCEEDED")
+    before = store.get_batch_job("batches/regress")
+    assert before["status"] == "JOB_STATE_SUCCEEDED"
+    assert before["completed_at"] is not None
+
+    # Now update counters — must NOT regress status or wipe completed_at.
+    store.update_batch_job_counts("batches/regress", completed_count=2, failed_count=0)
+    after = store.get_batch_job("batches/regress")
+    assert after["status"] == "JOB_STATE_SUCCEEDED"  # still succeeded
+    assert after["completed_at"] == before["completed_at"]  # timestamp frozen
+    assert after["completed_count"] == 2
+    assert after["failed_count"] == 0
+
+
 def test_delete_batch_job_removes_items_too(store):
     store.create_batch_job(
         job_id="batches/del", folder="/tmp", model="lite",

@@ -4,6 +4,21 @@ import pytest
 from modules import auth
 
 
+@pytest.fixture(autouse=True)
+def _isolate_happy_vision_home(monkeypatch, tmp_path_factory):
+    """Redirect HAPPY_VISION_HOME so every test sandbox-reads/writes config
+    under a per-test tmp directory instead of ~/.happy-vision.
+
+    Without this the settings API tests (and anything that calls
+    load_config / save_config) mutate the developer's real config.json — and
+    fail outright in sandboxed CI environments where $HOME is unwritable.
+    The hermetic guarantee matters more than test speed: tmp dirs are cheap.
+    """
+    sandbox = tmp_path_factory.mktemp("happyvision_home")
+    monkeypatch.setenv("HAPPY_VISION_HOME", str(sandbox))
+    yield sandbox
+
+
 class _InMemoryKeyring:
     """Mimics the subset of the keyring module that secret_store uses."""
     def __init__(self):

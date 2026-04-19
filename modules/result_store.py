@@ -467,6 +467,29 @@ class ResultStore:
             )
             self.conn.commit()
 
+    def update_batch_job_counts(
+        self,
+        job_id: str,
+        completed_count: int,
+        failed_count: int,
+    ) -> None:
+        """Update per-item counters WITHOUT touching status or completed_at.
+
+        `update_batch_job_status` always writes the status column; calling it
+        to report counts races with a just-written terminal state (e.g. the
+        poll loop wrote SUCCEEDED, then the materialise step ran counts with
+        a stale `status` argument and regressed the row back to PENDING).
+        Keep counter updates isolated from state transitions."""
+        now = datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                """UPDATE batch_jobs
+                   SET completed_count = ?, failed_count = ?, updated_at = ?
+                   WHERE job_id = ?""",
+                (completed_count, failed_count, now, job_id),
+            )
+            self.conn.commit()
+
     def get_batch_job(self, job_id: str) -> dict | None:
         row = self.conn.execute(
             "SELECT * FROM batch_jobs WHERE job_id = ?", (job_id,)

@@ -97,9 +97,34 @@ def _encode_photo(photo_path: str, max_size: int) -> bytes:
     return base64.b64encode(resized)
 
 
+def _normalize_schema_types(schema: dict) -> dict:
+    """Gemini Batch API rejects JSON Schema lowercase `type` values ("object",
+    "string", "array", "integer", "number", "boolean") with a 400
+    INVALID_ARGUMENT. It requires the proto enum form in uppercase. The
+    realtime SDK transparently converts; the batch wire format does not.
+
+    This recursively rewrites `type: "object"` → `type: "OBJECT"` anywhere
+    in the schema tree while leaving other fields (enums, descriptions,
+    properties keys) alone. Verified 2026-04-19 against live Gemini API."""
+    if not isinstance(schema, dict):
+        return schema
+    out = dict(schema)
+    t = out.get("type")
+    if isinstance(t, str) and t.islower():
+        out["type"] = t.upper()
+    props = out.get("properties")
+    if isinstance(props, dict):
+        out["properties"] = {k: _normalize_schema_types(v) for k, v in props.items()}
+    items = out.get("items")
+    if isinstance(items, dict):
+        out["items"] = _normalize_schema_types(items)
+    return out
+
+
 def _build_request_dict(photo_b64: bytes, model_name: str) -> dict:
     """Build the GenerateContentRequest dict for one photo. Matches the
-    realtime call's schema/config exactly so output parses identically."""
+    realtime call's schema/config exactly so output parses identically —
+    except for `type` casing in response_schema (see _normalize_schema_types)."""
     return {
         "contents": [
             {
@@ -117,7 +142,7 @@ def _build_request_dict(photo_b64: bytes, model_name: str) -> dict:
         "generation_config": {
             "temperature": 0,
             "response_mime_type": "application/json",
-            "response_schema": ANALYSIS_SCHEMA,
+            "response_schema": _normalize_schema_types(ANALYSIS_SCHEMA),
         },
         "safety_settings": [
             {"category": s["category"], "threshold": s["threshold"]}

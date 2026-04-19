@@ -47,6 +47,55 @@ def test_build_jsonl_creates_one_line_per_photo(three_photos, tmp_path):
     assert len(lines) == 3
 
 
+def test_schema_types_normalised_to_uppercase(three_photos, tmp_path):
+    """Gemini Batch API rejects JSON Schema lowercase `type` values with
+    400 INVALID_ARGUMENT. This regression test was added after a real
+    batch submission failed in v0.9.0; the fix (_normalize_schema_types)
+    recursively uppercases type strings in response_schema."""
+    out = tmp_path / "batch.jsonl"
+    gemini_batch.build_jsonl_for_chunk(three_photos[:1], out_path=out)
+    obj = json.loads(out.read_text().splitlines()[0])
+    schema = obj["request"]["generation_config"]["response_schema"]
+    # Top-level type
+    assert schema["type"] == "OBJECT"
+    # Recursed into properties
+    assert schema["properties"]["title"]["type"] == "STRING"
+    assert schema["properties"]["keywords"]["type"] == "ARRAY"
+    # Recursed into array items
+    assert schema["properties"]["keywords"]["items"]["type"] == "STRING"
+    assert schema["properties"]["people_count"]["type"] == "INTEGER"
+    # Enum category still present (we only touch type, not enum/description)
+    assert "ceremony" in schema["properties"]["category"]["enum"]
+
+
+def test_normalize_schema_types_handles_nested_and_non_dicts():
+    """Unit test the schema normaliser directly — leaves non-type fields
+    alone, handles arbitrary nesting, ignores non-string 'type' values."""
+    from modules.gemini_batch import _normalize_schema_types
+    schema = {
+        "type": "object",
+        "description": "kept as-is",
+        "properties": {
+            "x": {"type": "array", "items": {"type": "integer"}},
+            "y": {"type": "object", "properties": {"z": {"type": "string"}}},
+            "e": {"type": "string", "enum": ["a", "b"]},
+        },
+    }
+    out = _normalize_schema_types(schema)
+    assert out["type"] == "OBJECT"
+    assert out["description"] == "kept as-is"
+    assert out["properties"]["x"]["type"] == "ARRAY"
+    assert out["properties"]["x"]["items"]["type"] == "INTEGER"
+    assert out["properties"]["y"]["type"] == "OBJECT"
+    assert out["properties"]["y"]["properties"]["z"]["type"] == "STRING"
+    assert out["properties"]["e"]["type"] == "STRING"
+    assert out["properties"]["e"]["enum"] == ["a", "b"]
+    # Non-dict in → returned unchanged
+    assert _normalize_schema_types("not a dict") == "not a dict"
+    # Already uppercase → no-op
+    assert _normalize_schema_types({"type": "OBJECT"}) == {"type": "OBJECT"}
+
+
 def test_build_jsonl_uses_snake_case_fields(three_photos, tmp_path):
     """Gemini REST expects snake_case. A camelCase regression would silently
     fail all requests."""

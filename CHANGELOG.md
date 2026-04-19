@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.9.1 — 2026-04-19 · Batch 硬化 hotfix（3 個真 bug，外部 review + real e2e 抓到）
+
+v0.9.0 送出後做了 real-API e2e 測試 + 外部 reviewer 狠 audit,三個問題全修:
+
+### Bug 1 — JSONL response_schema type 大小寫不匹配（CRITICAL,v0.9.0 根本跑不起來)
+
+Gemini Batch API 在 JSONL 裡的 `response_schema` 拒絕 JSON Schema 小寫的 `"type": "object"`,需要 proto enum 式的大寫 `"OBJECT"/"STRING"/"ARRAY"/"INTEGER"`。realtime SDK 自動 normalise,batch 不會。v0.9.0 送出的每一張照片都會 400 INVALID_ARGUMENT。
+
+- `modules/gemini_batch.py`: 新增 `_normalize_schema_types()` 遞歸把小寫 type 升為大寫,在 `_build_request_dict` 使用
+- 驗證方式:真跑了 3 張照片 → SUCCEEDED 8 分鐘 → fetch_results 全綠,title/keywords/tokens 全對
+- 2 新 tests(schema_types_normalised_to_uppercase + normalize_schema_types 單元)
+
+### Bug 2 — BatchMonitor state regression（CORRECTNESS,成功 job 被回寫成舊狀態)
+
+`_materialise_results` 最後用 `job_row["status"]` 寫回 counters — 但 `job_row` 是 poll 前抓的,`_poll_one` 已經把狀態更新成 SUCCEEDED。這會讓剛完成的 job 被 regress 回 PENDING/RUNNING,UI 顯示錯、重啟後恢復判斷失準。
+
+- `modules/result_store.py`: 新 `update_batch_job_counts()` — 只動 completed_count/failed_count,絕不碰 status 或 completed_at
+- `modules/batch_monitor.py`: 改用 counts-only update
+- 1 新 regression test(`test_update_batch_job_counts_preserves_status`)驗證 SUCCEEDED + completed_at 不會被回寫覆蓋
+
+### Bug 3 — Test 不夠 hermetic(settings API tests 污染 ~/.happy-vision)
+
+原本 conftest 只隔離 Keychain,沒隔離 `HAPPY_VISION_HOME`。所以 `test_settings_api_*` 會寫到真的 `~/.happy-vision/config.json`。在 sandboxed CI 環境會失敗;在本機會靜默污染使用者設定。
+
+- `tests/conftest.py`: 新增 autouse fixture `_isolate_happy_vision_home` 把 env var redirect 到 per-test tmp_path
+- `tests/test_hermetic.py`: 3 新 tests 驗證 sandbox 生效 + 真 home config 不被污染
+
+### 測試
+326 passing(v0.9.0 是 320,+6 新)。
+
 ## v0.9.0 — 2026-04-19 · Gemini Batch API（省 50% 的非同步模式）
 
 15 萬張照片批量回補的場景,即時模式要跑 ~17 分鐘、花 $4.5。批次模式 24h 內完成、花 $2.25。這版把批次管道接上。
