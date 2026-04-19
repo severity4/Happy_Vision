@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.10.0 — 2026-04-19 · Batch 成本預覽 + 確認對話框
+
+v0.9 系列讓批次能跑穩了,現在讓使用者「送出前看到費用再按下去」。再也沒有不小心扛 $84 的事情。
+
+### 流程
+- Monitor 頁「📦 送批次」按鈕(只在 `batch_mode` 是 auto/always 時出現)
+- 點按鈕 → 彈窗即時估算:**照片數 / 批次費用 / 預計完成時間** 三大數字
+- 下面有「省 $X vs 即時模式 $Y(Batch 折扣 50%)」綠色對比條
+- 再下面 breakdown:模型、圖片長邊、平均 tokens、分 chunk 數、已過濾統計
+- 底部 Tier 1 付費提醒 + 去 AI Studio 綁卡的連結
+- 取消 / 確認送出 兩顆按鈕,確認後才真的 POST `/api/batch/submit`
+
+### Backend
+- `modules/cost_estimator.py`:兩段式估算
+  - **歷史均值**:如果 DB 裡同一個 model 有 ≥20 張 completed rows,用它們的實際 tokens 均值(最準)
+  - **啟發式回退**:沒歷史時按 image_max_size 查表(1024 / 1536 / 2048 / 3072 → 500 / 1000 / 2000 / 3500 input tokens),基於 v0.9.0 e2e 真實量測
+- `api/batch.py`:`GET /api/batch/estimate?folder=...&model=...&image_max_size=...&skip_existing=...&min_rating=...` 回 `CostEstimate` JSON
+- 估算時會:
+  1. 掃描資料夾(重用 `scan_photos`)
+  2. 套 `skip_existing` 過濾已處理
+  3. 套 `min_rating` 過濾(best-effort,exiftool 不在就跳過檢查不影響送出)
+  4. 計算 chunk 拆分(3000 張/job)
+  5. 套 Batch 50% 折扣、算 TWD 近似
+
+### Frontend
+- `components/BatchEstimateModal.vue`:backdrop blur 彈窗,三大數字 cards + breakdown + 送出/取消
+- `components/BatchJobsPanel.vue`:條件顯示(batch_mode 開 OR 有 jobs),加「📦 送批次」按鈕,空狀態也顯示提示
+- Tier 1 錯誤處理:後端回 402 tier_required 時,前端 toast + 引導去 billing
+
+### 測試
+- `tests/test_cost_estimator.py` 9 tests:歷史 vs 啟發式、50% 折扣斷言、skip_existing 過濾、空資料夾、chunk 計算、API endpoint 驗證
+- 335 passing(v0.9.1 是 326,+9 新)
+
 ## v0.9.1 — 2026-04-19 · Batch 硬化 hotfix（3 個真 bug，外部 review + real e2e 抓到）
 
 v0.9.0 送出後做了 real-API e2e 測試 + 外部 reviewer 狠 audit,三個問題全修:

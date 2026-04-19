@@ -152,6 +152,7 @@ def build_app():
         "--hidden-import=modules.updater",
         "--hidden-import=modules.gemini_batch",
         "--hidden-import=modules.batch_monitor",
+        "--hidden-import=modules.cost_estimator",
         "--hidden-import=google.genai",
         "--hidden-import=google.genai.types",
         "--hidden-import=webview",

@@ -24,6 +24,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from modules import gemini_batch, pipeline
 from modules.config import load_config
+from modules.cost_estimator import estimate_batch_cost
 from modules.event_store import EventStore
 from modules.logger import setup_logger
 from modules.result_store import ResultStore
@@ -48,6 +49,48 @@ def broadcast_batch_event(payload: dict) -> None:
                 dead.append(q)
         for q in dead:
             _sse_queues.remove(q)
+
+
+@batch_bp.route("/estimate", methods=["GET"])
+def estimate_submission():
+    """Return projected cost + photo count + ETA for a prospective batch run.
+
+    Query params:
+      folder (required): absolute path of the folder to scan
+      model, image_max_size, skip_existing, min_rating: override config
+
+    Response is a CostEstimate.to_dict() — frontend renders this in the
+    confirmation modal so users don't accidentally burn budget on 150k
+    photos when they meant a test folder."""
+    folder = (request.args.get("folder") or "").strip()
+    if not folder:
+        return jsonify({"error": "folder is required"}), 400
+    if not Path(folder).is_dir():
+        return jsonify({"error": f"not a directory: {folder}"}), 400
+
+    config = load_config()
+    model = request.args.get("model") or config.get("model", "lite")
+    image_max_size = int(request.args.get("image_max_size") or config.get("image_max_size", 3072))
+    skip_existing_arg = request.args.get("skip_existing")
+    skip_existing = (
+        skip_existing_arg.lower() in ("1", "true", "yes")
+        if skip_existing_arg is not None
+        else bool(config.get("skip_existing", True))
+    )
+    min_rating = int(request.args.get("min_rating") or config.get("min_rating", 0))
+
+    try:
+        est = estimate_batch_cost(
+            folder=folder,
+            model=model,
+            image_max_size=image_max_size,
+            skip_existing=skip_existing,
+            min_rating=min_rating,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("estimate_batch_cost failed")
+        return jsonify({"error": "estimate_failed", "message": str(e)}), 500
+    return jsonify(est.to_dict())
 
 
 @batch_bp.route("/submit", methods=["POST"])

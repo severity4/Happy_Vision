@@ -1,11 +1,22 @@
 <template>
-  <section v-if="jobs.length > 0" class="border border-border-default bg-surface-1 rounded-md p-5">
+  <section
+    v-if="jobs.length > 0 || batchModeEnabled"
+    class="border border-border-default bg-surface-1 rounded-md p-5"
+  >
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-2">
         <span class="led" :class="hasActive ? 'led-accent' : 'led-ok'"></span>
         <span class="kicker" style="color: var(--color-text-primary)">BATCH JOBS · 非同步批次</span>
       </div>
-      <span class="font-mono text-[10px] text-text-tertiary">{{ summaryLabel }}</span>
+      <div class="flex items-center gap-3">
+        <button
+          v-if="batchModeEnabled && currentFolder"
+          @click="openEstimate"
+          class="bg-accent-violet hover:bg-accent-violet-dim text-white font-mono text-[10px] tracking-wider px-3 py-1.5 rounded transition-colors"
+          title="送出目前資料夾為批次 (24h 內完成,省 50%)"
+        >📦 送批次</button>
+        <span class="font-mono text-[10px] text-text-tertiary">{{ summaryLabel }}</span>
+      </div>
     </div>
     <div class="space-y-2">
       <div
@@ -51,18 +62,56 @@
         </div>
       </div>
     </div>
-    <div class="mt-3 text-center">
+    <div v-if="jobs.length > 0" class="mt-3 text-center">
       <button
         @click="showAll = !showAll"
         class="font-mono text-[10px] tracking-wider text-text-tertiary hover:text-text-primary"
       >{{ showAll ? '只看進行中' : '全部顯示' }}</button>
     </div>
+    <div
+      v-else-if="batchModeEnabled"
+      class="text-center py-3 text-[11px] text-text-tertiary"
+    >
+      目前沒有 batch jobs。有目前監控資料夾時點「📦 送批次」提交。
+    </div>
+
+    <BatchEstimateModal
+      :open="estimateOpen"
+      :folder="currentFolder"
+      @close="estimateOpen = false"
+      @submitted="onSubmitted"
+    />
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { useSettingsStore } from '../stores/settings'
+import { useWatchStore } from '../stores/watch'
 import { pushToast } from '../utils/toast.js'
+import BatchEstimateModal from './BatchEstimateModal.vue'
+
+const settings = useSettingsStore()
+const watchStore = useWatchStore()
+
+const batchModeEnabled = computed(() => {
+  const mode = settings.settings?.batch_mode
+  return mode === 'auto' || mode === 'always'
+})
+
+const currentFolder = computed(() => {
+  return watchStore.folder || settings.settings?.watch_folder || ''
+})
+
+const estimateOpen = ref(false)
+function openEstimate() {
+  if (!currentFolder.value) {
+    pushToast('請先設定監控資料夾', { kind: 'info' })
+    return
+  }
+  estimateOpen.value = true
+}
+function onSubmitted() { fetchJobs() }
 
 const jobs = ref([])
 const showAll = ref(false)
