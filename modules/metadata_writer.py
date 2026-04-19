@@ -59,7 +59,12 @@ def check_exiftool_available() -> bool:
 
 def build_exiftool_args(result: dict) -> list[str]:
     """Build exiftool CLI arguments from an analysis result dict."""
-    args = []
+    # IPTC (IIM) defaults to Latin-1 in historical readers. Setting
+    # CodedCharacterSet=UTF8 marks the file's IPTC payload as UTF-8 so
+    # exiftool + Lightroom + Finder read CJK / Japanese / Korean keywords
+    # correctly instead of rendering as `??`. Must come BEFORE the text
+    # tags so it applies in the same write transaction.
+    args = ["-IPTC:CodedCharacterSet=UTF8"]
 
     if result.get("title"):
         args.append(f"-IPTC:Headline={result['title']}")
