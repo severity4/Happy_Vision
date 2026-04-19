@@ -170,15 +170,31 @@ def resize_for_api(photo_bytes: bytes, max_size: int = DEFAULT_MAX_IMAGE_SIZE) -
     return buf.getvalue()
 
 
-def parse_response(raw_text: str) -> dict | None:
-    """Parse Gemini response, filling in defaults for missing fields."""
+def parse_response(raw_text: str | None) -> dict | None:
+    """Parse Gemini response, filling in defaults for missing fields.
+
+    Safety filter or SDK drift can hand us `None` instead of text (full
+    block) or a bare list / scalar (schema miss). Return None in all
+    non-dict cases rather than raising — the caller treats None as
+    "photo failed" and carries on."""
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+
     try:
         text = raw_text.strip()
+        if not text:
+            return None
         if text.startswith("```"):
             text = text.split("\n", 1)[1]
             text = text.rsplit("```", 1)[0]
         data = json.loads(text)
-    except (json.JSONDecodeError, IndexError):
+    except (json.JSONDecodeError, IndexError, ValueError, AttributeError):
+        return None
+
+    # Guard: schema enforcement is best-effort. A list / string / None at
+    # the root would crash the defaults loop below with TypeError — treat
+    # it as "unusable response" instead.
+    if not isinstance(data, dict):
         return None
 
     defaults = {
