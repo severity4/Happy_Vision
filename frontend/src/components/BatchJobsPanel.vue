@@ -7,6 +7,12 @@
       <div class="flex items-center gap-2">
         <span class="led" :class="hasActive ? 'led-accent' : 'led-ok'"></span>
         <span class="kicker" style="color: var(--color-text-primary)">BATCH JOBS · 非同步批次</span>
+        <span
+          v-if="monitorStatus"
+          class="font-mono text-[9px] tracking-wider px-1.5 py-0.5 rounded"
+          :class="monitorStatus.color"
+          :title="monitorStatus.detail"
+        >{{ monitorStatus.label }}</span>
       </div>
       <div class="flex items-center gap-3">
         <button
@@ -115,8 +121,51 @@ function onSubmitted() { fetchJobs() }
 
 const jobs = ref([])
 const showAll = ref(false)
+const health = ref(null)
 let es = null
 let pollTimer = null
+let healthTimer = null
+
+// Monitor health badge (v0.11.0). Shows "alive" if last tick was <3min ago,
+// "stuck" if >3min, "off" if the daemon isn't running.
+const monitorStatus = computed(() => {
+  if (!health.value) return null
+  const h = health.value
+  if (!h.alive) {
+    return { label: 'MONITOR OFF', color: 'bg-warning/20 text-warning', detail: h.reason || '背景監控未啟動' }
+  }
+  if (!h.last_tick_at) {
+    return { label: 'STARTING', color: 'bg-surface-3 text-text-tertiary', detail: '監控啟動中...' }
+  }
+  const last = new Date(h.last_tick_at).getTime()
+  const ageSec = Math.round((Date.now() - last) / 1000)
+  if (ageSec > 180) {
+    return {
+      label: `STUCK ${Math.round(ageSec / 60)}min`,
+      color: 'bg-warning/20 text-warning',
+      detail: `監控上次 tick ${ageSec}s 前。錯誤: ${h.last_tick_error || '(無)'}`,
+    }
+  }
+  if (h.consecutive_errors > 0) {
+    return {
+      label: `RETRY ×${h.consecutive_errors}`,
+      color: 'bg-amber-500/20 text-amber-300',
+      detail: `連續 ${h.consecutive_errors} 次 tick 錯誤: ${h.last_tick_error || '(未知)'}`,
+    }
+  }
+  return {
+    label: 'LIVE',
+    color: 'bg-success/15 text-success',
+    detail: `上次 tick ${ageSec}s 前 · ${h.active_jobs} 進行中`,
+  }
+})
+
+async function fetchHealth() {
+  try {
+    const res = await fetch('/api/batch/health')
+    if (res.ok) health.value = await res.json()
+  } catch { /* ignore */ }
+}
 
 const ACTIVE_STATES = new Set([
   'JOB_STATE_PENDING',
@@ -224,19 +273,28 @@ function connectSSE() {
     es.addEventListener('batch_state', () => fetchJobs())
     es.addEventListener('batch_submitted', () => fetchJobs())
     es.addEventListener('batch_item', () => fetchJobs())
+    // v0.11.0: heartbeat events update the LIVE/STUCK badge without
+    // waiting for the 30s poll fallback.
+    es.addEventListener('batch_heartbeat', (ev) => {
+      try { health.value = { alive: true, ...JSON.parse(ev.data) } } catch {}
+    })
     es.onerror = () => { /* auto-reconnect by EventSource */ }
   } catch { /* ignore */ }
 }
 
 onMounted(() => {
   fetchJobs()
+  fetchHealth()
   connectSSE()
   // Fallback polling every 30s in case SSE is flaky behind a proxy.
   pollTimer = setInterval(fetchJobs, 30_000)
+  // Health polling slower — 20s is enough to detect a 3min-stuck monitor.
+  healthTimer = setInterval(fetchHealth, 20_000)
 })
 
 onBeforeUnmount(() => {
   if (es) { try { es.close() } catch {} es = null }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  if (healthTimer) { clearInterval(healthTimer); healthTimer = null }
 })
 </script>

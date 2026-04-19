@@ -87,11 +87,13 @@ def start_analysis():
                     skip_existing=bool(skip_existing),
                 )
             except gemini_batch.TierRequiredError as e:
+                # Code review v0.11.0: harmonise with /api/batch/submit,
+                # both endpoints return 403 with error_code for tier issues.
                 return jsonify({
                     "error": "tier_required",
                     "message": str(e),
                     "billing_url": gemini_batch.BILLING_URL,
-                }), 402
+                }), 403
             except Exception as e:  # noqa: BLE001
                 log.exception("Batch submit via analysis/start failed")
                 return jsonify({"error": "submit_failed", "message": str(e)}), 500
@@ -99,7 +101,10 @@ def start_analysis():
                 "folder": folder,
                 **summary,
             })
-            return jsonify({"status": "batch_submitted", **summary})
+            # Code review v0.11.0: same status string as /api/batch/submit
+            # ("submitted") + `mode: "batch"` discriminator so the client
+            # has one field to branch on, not two different status values.
+            return jsonify({"status": "submitted", "mode": "batch", **summary})
     with EventStore() as events:
         events.add_event(
             "analysis_api_start",

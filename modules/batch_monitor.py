@@ -15,8 +15,10 @@ Flask here to keep this module test-friendly.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +33,14 @@ from modules.result_store import ResultStore
 log = setup_logger("batch_monitor")
 
 POLL_INTERVAL_SECONDS = 60
+# v0.11.0: after this many consecutive per-job poll failures, mark the job
+# JOB_STATE_FAILED so it stops occupying the active list. Catches zombies
+# from API key rotation or the user revoking billing mid-flight. Tuned to
+# ~20 × 60s = 20 min of genuine API trouble before giving up.
+MAX_POLL_FAILURES = 20
+# Jitter the sleep between ticks ±20% so many app instances don't stampede
+# Gemini on the same 60s boundary (SRE audit).
+JITTER_FACTOR = 0.2
 # Map internal status to user-facing Chinese; the frontend can override,
 # but the SSE event payload keeps state.name for machine logic.
 STATE_DISPLAY = {
@@ -54,8 +64,14 @@ class BatchMonitor:
         self._event_sink = event_sink
         self._db_path = db_path
         # Exponential backoff for transient API errors so we don't hammer Google
-        # when their side is wobbling.
+        # when their side is wobbling. Only counts ALL-jobs outages, not
+        # per-job failures — those go on `batch_jobs.consecutive_poll_failures`.
         self._consecutive_errors = 0
+        # Observability (v0.11.0): expose heartbeat state to /api/batch/health.
+        self._lock = threading.Lock()
+        self._last_tick_at: str | None = None
+        self._last_tick_error: str | None = None
+        self._active_job_count = 0
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -82,23 +98,54 @@ class BatchMonitor:
         # Warm-up delay — let the app finish its boot work before we touch the API.
         time.sleep(3)
         while not self._stop.is_set():
+            tick_error: str | None = None
             try:
                 self._tick()
                 self._consecutive_errors = 0
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 self._consecutive_errors += 1
+                tick_error = str(e)[:300]
                 log.exception("Batch monitor tick failed (streak=%d)", self._consecutive_errors)
-            delay = POLL_INTERVAL_SECONDS * (2 ** min(self._consecutive_errors, 4))
-            self._stop.wait(timeout=delay)
+            with self._lock:
+                self._last_tick_at = datetime.now().isoformat()
+                self._last_tick_error = tick_error
+            # Heartbeat emission so the UI / /api/batch/health can prove the
+            # thread is alive (SRE HIGH: observability gap).
+            self._emit({
+                "type": "batch_heartbeat",
+                "ts": self._last_tick_at,
+                "active_jobs": self._active_job_count,
+                "consecutive_errors": self._consecutive_errors,
+                "last_error": tick_error,
+            })
+            base = POLL_INTERVAL_SECONDS * (2 ** min(self._consecutive_errors, 4))
+            # ±JITTER_FACTOR so many clients don't land in lockstep.
+            delay = base * (1 + random.uniform(-JITTER_FACTOR, JITTER_FACTOR))
+            self._stop.wait(timeout=max(5.0, delay))
+
+    def health_snapshot(self) -> dict:
+        """Exposed to /api/batch/health. Safe to read from any thread."""
+        with self._lock:
+            return {
+                "alive": self._thread is not None and self._thread.is_alive(),
+                "last_tick_at": self._last_tick_at,
+                "last_tick_error": self._last_tick_error,
+                "active_jobs": self._active_job_count,
+                "consecutive_errors": self._consecutive_errors,
+            }
 
     def _tick(self) -> None:
         config = load_config()
         api_key = (config.get("gemini_api_key") or "").strip()
         if not api_key:
+            with self._lock:
+                self._active_job_count = 0
             return  # User hasn't configured a key yet; nothing to poll.
         store = ResultStore(self._db_path)
         try:
             active = store.list_batch_jobs(active_only=True, limit=50)
+            with self._lock:
+                self._active_job_count = len(active)
             if not active:
                 return
             log.info("Polling %d active batch jobs", len(active))
@@ -114,8 +161,37 @@ class BatchMonitor:
         try:
             state_info = gemini_batch.get_job_state(job_id, api_key)
         except Exception as e:  # noqa: BLE001
-            log.warning("get_job_state(%s) failed: %s", job_id, e)
+            # v0.11.0: per-job failure tracking. One flaky job won't trigger
+            # the whole-monitor backoff, but it WILL escalate its own
+            # consecutive_poll_failures — after MAX_POLL_FAILURES ticks we
+            # mark it FAILED so it stops polluting the active list.
+            msg = str(e)[:300]
+            log.warning("get_job_state(%s) failed: %s", job_id, msg)
+            failures = store.record_poll_attempt(job_id, error=msg)
+            if failures >= MAX_POLL_FAILURES:
+                log.error(
+                    "Batch %s exceeded %d poll failures — marking FAILED",
+                    job_id, MAX_POLL_FAILURES,
+                )
+                store.update_batch_job_status(
+                    job_id, "JOB_STATE_FAILED",
+                    error_message=f"Monitor gave up after {MAX_POLL_FAILURES} poll failures: {msg}",
+                )
+                self._emit({
+                    "type": "batch_state",
+                    "job_id": job_id,
+                    "state": "JOB_STATE_FAILED",
+                    "state_display": STATE_DISPLAY.get("JOB_STATE_FAILED", "失敗"),
+                    "error": f"poll_failures_exceeded ({MAX_POLL_FAILURES})",
+                })
+                # Roll pending items to failed so the UI shows them.
+                for item in store.get_batch_items(job_id):
+                    if item["status"] == "pending":
+                        store.mark_batch_item(job_id, item["request_key"], "failed")
+                        store.mark_failed(item["file_path"], "Batch: monitor gave up")
             return
+        # Success — reset per-job failure counter.
+        store.record_poll_attempt(job_id, error=None)
         state = state_info["state"]
         output_file = state_info["output_file"]
         err = state_info["error"]

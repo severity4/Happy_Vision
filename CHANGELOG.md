@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.11.0 — 2026-04-19 · Observability + zombie detection(SRE audit 剩下的 HIGH)
+
+v0.10.1 修了 CRITICAL/HIGH 的前半:安全 + idempotency。這版收尾 SRE audit 的後半:監控的可觀測性 + 殭屍 job 處理 + 背壓改善。
+
+### 監控健康可見(HIGH)
+凌晨 3 點背景 monitor 死了,早上起來什麼都不知道 — 之前的盲點。這版把狀態攤開:
+- `batch_jobs` 加 3 欄:`last_polled_at`, `last_poll_error`, `consecutive_poll_failures`
+- `GET /api/batch/health`:回 `{alive, last_tick_at, last_tick_error, active_jobs, consecutive_errors}`
+- Monitor 每 tick 結束發 `batch_heartbeat` SSE event(含 active_jobs 數 + streak)
+- Monitor 加 `health_snapshot()` 公開 thread-safe 狀態
+- BatchJobsPanel 新增狀態徽章:`LIVE` / `RETRY ×N` / `STUCK 5min` / `MONITOR OFF` — tooltip 顯示詳情。3 分鐘沒 tick 就顯示 stuck
+
+### 殭屍 job 自動判決(HIGH)
+API key rotated / billing 撤銷 / quota 耗盡 → job 每次 poll 都失敗,之前會卡在 PENDING 直到 48h expired。這版:
+- `record_poll_attempt(job_id, error=None)`:atomic 增減 `consecutive_poll_failures`,記錄 `last_poll_error`(500 字截斷)
+- `_poll_one` 成功就 reset counter、失敗就 +1
+- 超過 `MAX_POLL_FAILURES = 20`(約 20 分鐘持續錯)自動標 `JOB_STATE_FAILED`,pending items 全數 roll 到 failed,送 SSE 通知
+- 一個 flaky job 不再影響其他 jobs 的 polling(per-job attribution)
+
+### Backoff 去齊步走(MEDIUM)
+多個 app 實例在同一秒 tick → Gemini 側 request spike。加 ±20% jitter 打散。
+
+### Graceful shutdown(LOW)
+`atexit.register(stop_background_monitor)` — pywebview quit 時 monitor 有 5s 清掉 in-flight 工作,WAL 不會殘留。
+
+### API 形狀統一 + 402→403(code review MEDIUM)
+- `POST /api/batch/submit` 和 `POST /api/analysis/start`(路由到批次)現在都回 `{status: "submitted", mode: "batch", ...}`。前端只看一個欄位。
+- TierRequiredError 從 402 Payment Required 改成 403 Forbidden 配 `error_code: "tier_required"` — 402 很多 proxy/client 誤解,403 標準得多。
+
+### 測試
+- `tests/test_batch_observability.py` 9 tests(counter reset、truncate、zombie 判決、single flake 不誤判、recovery、health snapshot、endpoint variations、403 tier)
+- 356 passing(v0.10.1 是 347,+9 新)
+
 ## v0.10.1 — 2026-04-19 · Security + Resumability hotfix(三方 audit + 一個前端 bug)
 
 跑 Code Reviewer + SRE + Security 三組 agent 掃 v0.9-v0.10,抓到 CRITICAL/HIGH 五個。再加使用者回報一個前端 bug。都修。

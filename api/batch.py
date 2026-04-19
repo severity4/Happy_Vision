@@ -172,7 +172,7 @@ def submit_batch():
     with EventStore() as events:
         events.add_event(
             "batch_api_submit",
-            folder=folder,
+            folder=str(folder),
             details={
                 "model": model,
                 "image_max_size": image_max_size,
@@ -190,24 +190,29 @@ def submit_batch():
             skip_existing=skip_existing,
         )
     except gemini_batch.TierRequiredError as e:
+        # Code review: 402 Payment Required is historically unused and many
+        # proxies/clients mishandle it. Use 403 with a stable error_code
+        # the frontend branches on.
         return jsonify({
             "error": "tier_required",
             "message": str(e),
             "billing_url": gemini_batch.BILLING_URL,
-        }), 402
+        }), 403
     except Exception as e:  # noqa: BLE001
         log.exception("Batch submit failed")
         return jsonify({"error": "submit_failed", "message": str(e)}), 500
 
     broadcast_batch_event({
         "type": "batch_submitted",
-        "folder": folder,
+        "folder": str(folder),
         "chunks": summary["chunks"],
         "total_photos": summary["total_photos"],
         "skipped": summary["skipped"],
         "jobs": summary["jobs"],
     })
-    return jsonify({"status": "submitted", **summary})
+    # mode: "batch" harmonises with /api/analysis/start's routed response,
+    # so the client branches on one field.
+    return jsonify({"status": "submitted", "mode": "batch", **summary})
 
 
 @batch_bp.route("/jobs", methods=["GET"])
@@ -280,6 +285,30 @@ def delete_job(job_id: str):
     finally:
         store.close()
     return jsonify({"deleted": True})
+
+
+@batch_bp.route("/health", methods=["GET"])
+def health():
+    """Monitor heartbeat + active job snapshot for UI health indicator.
+
+    v0.11.0 observability fix. SRE audit flagged that when the daemon dies
+    at 3am the user sees nothing the next morning. This endpoint makes the
+    monitor's state inspectable; frontend polls it + shows a "monitor
+    stuck" badge if `last_tick_at` is >3min ago.
+    """
+    # Lazy-import to avoid circular (monitor is started from web_ui which
+    # imports this blueprint).
+    from modules.batch_monitor import _monitor_instance
+    if _monitor_instance is None:
+        return jsonify({
+            "alive": False,
+            "last_tick_at": None,
+            "last_tick_error": None,
+            "active_jobs": 0,
+            "consecutive_errors": 0,
+            "reason": "monitor_not_started",
+        })
+    return jsonify(_monitor_instance.health_snapshot())
 
 
 @batch_bp.route("/stream")

@@ -121,6 +121,20 @@ class ResultStore:
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_updated_at ON batch_jobs(updated_at DESC)")
+        # v0.11.0: observability columns. Added via ALTER so old DBs upgrade
+        # transparently. `consecutive_poll_failures` enables zombie detection
+        # (SRE audit HIGH): if a job's API calls keep failing — e.g. user
+        # rotated the key mid-flight — we mark it JOB_STATE_FAILED after
+        # MAX_POLL_FAILURES ticks instead of polling it forever.
+        for col, coltype in [
+            ("last_polled_at", "TEXT"),
+            ("last_poll_error", "TEXT"),
+            ("consecutive_poll_failures", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                self.conn.execute(f"ALTER TABLE batch_jobs ADD COLUMN {col} {coltype}")
+            except sqlite3.OperationalError:
+                pass
 
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS batch_items (
@@ -466,6 +480,48 @@ class ResultStore:
                 ),
             )
             self.conn.commit()
+
+    def record_poll_attempt(
+        self,
+        job_id: str,
+        error: str | None = None,
+    ) -> int:
+        """Update `last_polled_at` + increment/reset `consecutive_poll_failures`
+        atomically. Returns the NEW failure count after this attempt.
+
+        Used by the batch monitor for zombie detection (SRE HIGH). A job's
+        poll loop may work fine for the first hour then start returning
+        PERMISSION_DENIED when the user rotates the API key — without
+        this counter the row would sit forever.
+        """
+        now = datetime.now().isoformat()
+        with self._lock:
+            cur = self.conn.cursor()
+            if error is None:
+                cur.execute(
+                    """UPDATE batch_jobs SET last_polled_at = ?,
+                              last_poll_error = NULL,
+                              consecutive_poll_failures = 0,
+                              updated_at = ?
+                       WHERE job_id = ?""",
+                    (now, now, job_id),
+                )
+                self.conn.commit()
+                return 0
+            cur.execute(
+                """UPDATE batch_jobs SET last_polled_at = ?,
+                          last_poll_error = ?,
+                          consecutive_poll_failures = consecutive_poll_failures + 1,
+                          updated_at = ?
+                   WHERE job_id = ?""",
+                (now, error[:500], now, job_id),
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT consecutive_poll_failures FROM batch_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            return int(row["consecutive_poll_failures"]) if row else 0
 
     def update_batch_job_counts(
         self,

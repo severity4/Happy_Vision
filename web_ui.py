@@ -101,8 +101,13 @@ def _post_start_init() -> None:
     # Idempotent — safe if the user hasn't configured a key yet (the monitor
     # no-ops until one is present).
     try:
-        from modules.batch_monitor import start_background_monitor
+        from modules.batch_monitor import start_background_monitor, stop_background_monitor
         start_background_monitor(event_sink=broadcast_batch_event)
+        # v0.11.0 SRE: register graceful shutdown. PyInstaller .app gets
+        # SIGTERM on quit; the daemon thread otherwise dies mid-request to
+        # Gemini. Clean stop lets the 5s join complete any in-flight work.
+        import atexit
+        atexit.register(stop_background_monitor)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("start_background_monitor failed")
