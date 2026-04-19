@@ -75,6 +75,14 @@ def _entity_too_large(_err):
     return jsonify({"error": "request body too large (10MB cap)"}), 413
 
 
+@app.errorhandler(405)
+def _method_not_allowed(_err):
+    # Flask's default 405 renders an HTML template, which breaks the
+    # frontend's JSON-parsing pipeline (undefined toast, confusing UX).
+    # Keep the shape consistent with every other API error.
+    return jsonify({"error": "method not allowed"}), 405
+
+
 # Register blueprints
 app.register_blueprint(settings_bp)
 app.register_blueprint(analysis_bp)
