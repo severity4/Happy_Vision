@@ -206,6 +206,8 @@ wait $SERVER_PID
 """)
     launcher.chmod(0o755)
 
+    _codesign_if_identity_available(DIST_DIR / f"{APP_NAME}.app")
+
     print(f"\n{'='*50}")
     print("BUILD COMPLETE!")
     print(f"{'='*50}")
@@ -215,5 +217,121 @@ wait $SERVER_PID
     print(f"Or run: ./{launcher.relative_to(PROJECT_DIR)}")
 
 
+# v0.7.2: self-signed code-signing identity to fix the "Keychain keeps
+# asking for password every build" problem. Ad-hoc signed apps have no
+# stable designated requirement, so macOS can't persist the Keychain ACL
+# entry across rebuilds — every new binary triggers a fresh password
+# prompt. Signing with ANY stable identity (self-signed is fine here,
+# this is a dev tool not an App Store release) makes the ACL stick to
+# the identity rather than the binary hash.
+CODESIGN_IDENTITY = "Happy Vision Developer (Local)"
+CODESIGN_IDENTITY_DIR = Path.home() / ".happy-vision-codesign"
+
+
+def _codesign_if_identity_available(app_path: Path) -> None:
+    """Sign the .app with the local self-signed identity if installed.
+    Falls back to ad-hoc (PyInstaller default) with a warning if not."""
+    if not app_path.exists():
+        print(f"Skipping codesign: {app_path} not found")
+        return
+
+    # Check if the identity is installed + valid for code signing
+    try:
+        result = subprocess.run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception as e:
+        print(f"Skipping codesign: cannot query identities ({e})")
+        return
+
+    if CODESIGN_IDENTITY not in result.stdout:
+        print(f"\n⚠️  Self-signed identity '{CODESIGN_IDENTITY}' not installed.")
+        print("   App will use PyInstaller's ad-hoc signature — macOS Keychain")
+        print("   will keep prompting for password on every rebuild.")
+        print(f"   To install once, run: python3 {__file__} --setup-codesign")
+        return
+
+    print(f"\nCodesigning .app with '{CODESIGN_IDENTITY}'...")
+    try:
+        subprocess.run(
+            ["codesign", "--force", "--deep",
+             "--sign", CODESIGN_IDENTITY,
+             "--identifier", "com.inout.HappyVision",
+             str(app_path)],
+            check=True, timeout=120,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Codesign FAILED: {e}")
+        return
+    # Verify
+    subprocess.run(["codesign", "--verify", "--verbose", str(app_path)],
+                   timeout=30)
+    print("Codesign verified.")
+
+
+def setup_codesign_identity() -> None:
+    """One-time: generate + install a self-signed code-signing identity.
+    Safe to re-run — idempotent."""
+    CODESIGN_IDENTITY_DIR.mkdir(mode=0o700, exist_ok=True)
+    crt = CODESIGN_IDENTITY_DIR / "hv-codesign.crt"
+    key = CODESIGN_IDENTITY_DIR / "hv-codesign.key"
+    p12 = CODESIGN_IDENTITY_DIR / "hv-codesign.p12"
+
+    # Already installed?
+    check = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning"],
+        capture_output=True, text=True,
+    )
+    if CODESIGN_IDENTITY in check.stdout:
+        print(f"'{CODESIGN_IDENTITY}' is already installed. Nothing to do.")
+        return
+
+    if not crt.exists() or not key.exists():
+        print(f"Generating self-signed cert at {CODESIGN_IDENTITY_DIR}")
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-days", "3650",
+            "-keyout", str(key), "-out", str(crt),
+            "-subj", f"/CN={CODESIGN_IDENTITY}/O=INOUT Creative/C=TW",
+            "-addext", "basicConstraints=critical,CA:false",
+            "-addext", "keyUsage=critical,digitalSignature",
+            "-addext", "extendedKeyUsage=critical,codeSigning",
+        ], check=True)
+
+    if not p12.exists():
+        print(f"Bundling PKCS12 at {p12}")
+        subprocess.run([
+            "openssl", "pkcs12", "-export",
+            "-in", str(crt), "-inkey", str(key),
+            "-out", str(p12),
+            "-password", "pass:happyvision",
+            "-name", CODESIGN_IDENTITY,
+            # Legacy PBE so macOS security CLI can parse it
+            "-keypbe", "PBE-SHA1-3DES",
+            "-certpbe", "PBE-SHA1-3DES",
+            "-macalg", "sha1",
+        ], check=True)
+
+    login_kc = str(Path.home() / "Library/Keychains/login.keychain-db")
+    subprocess.run([
+        "security", "import", str(p12),
+        "-k", login_kc,
+        "-P", "happyvision",
+        "-T", "/usr/bin/codesign",
+        "-T", "/usr/bin/security",
+    ], check=True)
+    subprocess.run([
+        "security", "add-trusted-cert", "-r", "trustRoot",
+        "-p", "codeSign", "-k", login_kc, str(crt),
+    ], check=True)
+    print(f"\n✅ '{CODESIGN_IDENTITY}' installed and trusted for code signing.")
+    print("   Future .app builds will be signed with it. Keychain ACL will")
+    print("   persist across rebuilds after one 'Always Allow' click.")
+
+
 if __name__ == "__main__":
-    build_app()
+    if len(sys.argv) > 1 and sys.argv[1] == "--setup-codesign":
+        setup_codesign_identity()
+    else:
+        build_app()

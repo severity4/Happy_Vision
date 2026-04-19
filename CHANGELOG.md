@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.7.2 — 2026-04-19 (hotfix · Keychain 反覆要密碼)
+
+### 🔴 使用者場景：每次開 App 都要輸入 macOS 登入密碼
+
+User reported morning of v0.7.1: 「一直叫我輸入登入密碼」(keeps asking for login password). Root cause: PyInstaller default `codesign --sign -` (ad-hoc) produces a new binary hash on every rebuild. macOS Keychain indexes its per-app access control entries (ACLs) by the designated requirement, which for ad-hoc signed apps collapses to the binary hash. New build = new hash = no ACL match = macOS must re-prompt for the keychain password.
+
+**Fix:** Ship every build with a **stable self-signed code-signing identity** (`Happy Vision Developer (Local)`). Keychain now matches ACL by the signing identity instead of binary hash → same identity across rebuilds → one «Always Allow» click persists across every future version.
+
+### 如何啟用
+One-time setup (在 Happy_Vision repo 目錄跑一次即可)：
+
+```
+python3 build_app.py --setup-codesign
+```
+
+這會：
+1. 用 openssl 生成 self-signed cert（RSA 2048，10 年，Code Signing EKU）
+2. 存到 `~/.happy-vision-codesign/`
+3. Import 進 login keychain，標記為 code signing 受信任
+4. 下一次 `make app` 會自動用這個身份簽 .app
+
+**Note：** 此憑證只在本機生效；不是 Apple 公證，不能公開分發（但我們也沒公開分發，內部工具 OK）。
+
+### Build flow
+- `build_app.py` build 完 .app 後自動檢查 `Happy Vision Developer (Local)` 身份是否存在
+- 存在 → `codesign --force --deep --sign "Happy Vision Developer (Local)" --identifier com.inout.HappyVision`
+- 不存在 → 印出警告，fallback 到 ad-hoc（跟之前一樣會反覆要密碼）
+
+### Security note
+`com.inout.HappyVision` identifier + self-signed cert ≠ notarized app。Gatekeeper 仍會跳 "rejected"（這是我們一直的狀態），但對 Keychain ACL 而言足夠穩定。如果未來想發給外部同事，需要 `$99 Apple Developer` + notarize。
+
 ## v0.7.1 — 2026-04-19 (hotfix · v0.7.0 UX 其實沒 ship)
 
 Evidence Collector 驗收 v0.7.0 時發現 **所有 UX 修改實際沒被打進 .app**：
