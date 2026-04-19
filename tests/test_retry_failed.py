@@ -89,15 +89,19 @@ def test_api_failed_list_returns_count_and_items():
     assert paths == {"/tmp/fail1.jpg", "/tmp/fail2.jpg"}
 
 
-def test_api_retry_clears_failures():
+def test_api_retry_clears_failures(tmp_path):
     import web_ui
+    # v0.12.1: retry endpoint now enforces path allowlist, so register
+    # the tmp location like /api/watch/start would.
+    web_ui.register_allowed_root(tmp_path)
+    target = str(tmp_path / "fail1.jpg")
     store = ResultStore()
     try:
-        store.mark_failed("/tmp/fail1.jpg", "reason")
+        store.mark_failed(target, "reason")
     finally:
         store.close()
     client = web_ui.app.test_client()
-    r = client.post("/api/results/retry", json={"file_paths": ["/tmp/fail1.jpg"]})
+    r = client.post("/api/results/retry", json={"file_paths": [target]})
     assert r.status_code == 200
     body = r.get_json()
     assert body["cleared"] == 1
@@ -117,24 +121,30 @@ def test_api_retry_without_files_or_folder_returns_400():
     assert "no failures" in r.get_json()["error"]
 
 
-def test_api_retry_with_folder_batch_clears_all_under_it():
+def test_api_retry_with_folder_batch_clears_all_under_it(tmp_path):
     import web_ui
+    proj_a = tmp_path / "project_a"
+    proj_b = tmp_path / "project_b"
+    proj_a.mkdir()
+    proj_b.mkdir()
+    web_ui.register_allowed_root(proj_a)
+    web_ui.register_allowed_root(proj_b)
     store = ResultStore()
     try:
-        store.mark_failed("/project/a/fail1.jpg", "x")
-        store.mark_failed("/project/a/fail2.jpg", "y")
-        store.mark_failed("/project/b/fail3.jpg", "z")
+        store.mark_failed(str(proj_a / "fail1.jpg"), "x")
+        store.mark_failed(str(proj_a / "fail2.jpg"), "y")
+        store.mark_failed(str(proj_b / "fail3.jpg"), "z")
     finally:
         store.close()
     client = web_ui.app.test_client()
-    r = client.post("/api/results/retry", json={"folder": "/project/a"})
+    r = client.post("/api/results/retry", json={"folder": str(proj_a)})
     assert r.status_code == 200
     body = r.get_json()
     assert body["cleared"] == 2
-    # /project/b survives
+    # proj_b survives
     store = ResultStore()
     try:
         left = store.get_failed_results()
-        assert [i["file_path"] for i in left] == ["/project/b/fail3.jpg"]
+        assert [i["file_path"] for i in left] == [str(proj_b / "fail3.jpg")]
     finally:
         store.close()

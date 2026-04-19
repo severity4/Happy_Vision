@@ -1,11 +1,37 @@
 """api/results.py — Query and edit analysis results"""
 
+from pathlib import Path
+
 from flask import Blueprint, request, jsonify
 
 from modules.metadata_writer import write_metadata
 from modules.result_store import ResultStore
 
 results_bp = Blueprint("results", __name__, url_prefix="/api/results")
+
+
+def _coerce_int(v, default: int) -> int:
+    """Garbage-in-safe int parse. Same pattern as api/settings.py and
+    api/batch.py — bad value returns the caller's default instead of
+    letting Werkzeug blow up with a 500."""
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _folder_is_allowed(folder: str) -> bool:
+    """Reuse the web_ui path allowlist (home + registered roots). v0.12.1
+    closes the gap between v0.10.1's batch-endpoint hardening and the new
+    v0.12.0 retry endpoints: a caller with the session token shouldn't be
+    able to probe or DELETE failed rows under arbitrary paths."""
+    if not folder:
+        return True  # "no folder" = whole DB, allowed
+    try:
+        from web_ui import _path_is_allowed
+    except ImportError:
+        return False
+    return _path_is_allowed(Path(folder))
 
 
 @results_bp.route("", methods=["GET"])
@@ -25,7 +51,12 @@ def list_failed():
     accidentally re-enqueuing failures from a different project.
     """
     folder = request.args.get("folder", "").strip() or None
-    limit = max(1, min(5000, int(request.args.get("limit", 1000))))
+    if folder and not _folder_is_allowed(folder):
+        return jsonify({
+            "error": "folder_not_allowed",
+            "message": "此資料夾不在允許清單。",
+        }), 403
+    limit = max(1, min(5000, _coerce_int(request.args.get("limit"), 1000)))
     with ResultStore() as store:
         items = store.get_failed_results(folder=folder, limit=limit)
     return jsonify({"count": len(items), "items": items})
@@ -43,6 +74,26 @@ def retry_failed():
     data = request.get_json(silent=True) or {}
     file_paths = data.get("file_paths")
     folder = (data.get("folder") or "").strip() or None
+
+    # Allowlist check on folder AND each file_path — caller with the
+    # session token shouldn't be able to clear failure markers outside
+    # paths they've legitimately opened (via settings, onboarding, or
+    # /api/watch/start). Matches the v0.10.1 batch endpoint hardening.
+    if folder and not _folder_is_allowed(folder):
+        return jsonify({
+            "error": "folder_not_allowed",
+            "message": "此資料夾不在允許清單。",
+        }), 403
+    if file_paths:
+        if not isinstance(file_paths, list):
+            return jsonify({"error": "file_paths must be an array"}), 400
+        bad = [p for p in file_paths if not _folder_is_allowed(str(Path(p).parent))]
+        if bad:
+            return jsonify({
+                "error": "path_not_allowed",
+                "message": f"{len(bad)} 個檔案不在允許清單:{bad[0]}",
+            }), 403
+
     with ResultStore() as store:
         if not file_paths and folder:
             items = store.get_failed_results(folder=folder, limit=5000)

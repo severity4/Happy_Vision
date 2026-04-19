@@ -135,6 +135,14 @@ async function fetchList() {
 
 async function retryAll() {
   if (items.value.length === 0) return
+  // v0.12.1: confirm before clearing. Pure UX guard — the action isn't
+  // destructive (we only remove the 'failed' marker, not the photo or
+  // prior good results), but 50+ rows at once deserves a second click.
+  const ok = window.confirm(
+    `確定要重試 ${items.value.length} 張失敗照片嗎?\n\n` +
+    `這會清除失敗標記。下次分析執行時(自動監控或手動送批次),這些照片會重新送到 Gemini API。`
+  )
+  if (!ok) return
   retrying.value = true
   try {
     const res = await fetch('/api/results/retry', {
@@ -146,9 +154,9 @@ async function retryAll() {
       }),
     })
     const data = await res.json()
-    if (!res.ok) throw new Error(data.error || '重試失敗')
+    if (!res.ok) throw new Error(data.error || data.message || '重試失敗')
     pushToast(
-      `已清除 ${data.cleared} 張失敗標記。下次分析會重新送 API。`,
+      `已清除 ${data.cleared} 張失敗標記 · 下次分析執行時會自動重跑`,
       { kind: 'success' },
     )
     emit('retried', data)

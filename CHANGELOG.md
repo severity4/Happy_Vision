@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.12.1 — 2026-04-19 · Retry API security hotfix + UX 二次確認(自審發現)
+
+v0.12.0 self-review 抓到兩個跟 v0.10.1 audit 同性質的漏洞 —— retry endpoints 沒有延續 batch endpoints 的安全硬化。4/23 生產前修掉。
+
+### Security · 路徑 allowlist 補到 retry endpoints
+`api/results.py` 的 `/failed` + `/retry` 沒檢查 `_path_is_allowed`,使用者(或拿到 session token 的任何人)可以傳任意 `folder=` 或 `file_paths=[]` 枚舉 DB 裡其他路徑下的失敗 row、或清除它們的失敗標記。跟 `/api/batch/{submit,estimate}` v0.10.1 修的是完全同一個 class of bug。
+
+- `_folder_is_allowed()` helper 重用 web_ui 的 allowlist
+- `/failed`:folder 不在 allowlist → 403 `folder_not_allowed`
+- `/retry`:folder 同上;file_paths 逐個驗 parent → 任一個在 allowlist 外 → 403 `path_not_allowed`
+- 額外:`file_paths` 必須是 array,不然 400
+
+### Reliability · `int(request.args.get("limit", 1000))` 不崩
+`/api/results/failed?limit=abc` 之前會 500,現在用 `_coerce_int` fallback 到 default。v0.10.1 已在 batch endpoints 修過,這次補到 results.py。
+
+### UX · 重試前加二次確認 + toast 措辭更清楚
+`FailedRetryModal.retryAll` 按下去之前 `window.confirm`「確定要重試 N 張失敗照片嗎?這會清除失敗標記。下次分析執行時會重新送到 Gemini API」。Toast 從「下次分析會重新送 API」改成「下次分析執行時會自動重跑」,明確告訴使用者不會立刻重跑。
+
+### 測試
+- `tests/test_retry_security.py` 8 個 regression tests(allowlist 三路徑、bad limit 不 500、non-array file_paths、registered 放行)
+- `tests/test_retry_failed.py` 兩個舊測試改成用 `tmp_path + register_allowed_root`
+- 385 passing(v0.12.0 是 377,+8 新)
+
 ## v0.12.0 — 2026-04-19 · Scale hardening(pre-4/23 production run 備戰)
 
 4/23 要上 15 萬張生產級 batch。這版把 audit 找到還沒處理的 MEDIUM 項目全部清掉:DB scale、partial-chunk rollback、retry UI。
