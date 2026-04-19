@@ -54,11 +54,25 @@ def _path_is_allowed(path: Path) -> bool:
 
 app = Flask(__name__)
 
+# Cap request body size so a buggy frontend (or accidentally huge results
+# query) can't OOM the Flask worker. 10MB is generous: the largest
+# legitimate body is a bulk results-by-path query for a few thousand file
+# paths (~150B each), which stays comfortably under the cap. Flask raises
+# 413 automatically before invoking the route handler.
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+
 
 @app.before_request
 def _check_auth():
     if not is_request_allowed(request):
         return jsonify({"error": "Forbidden"}), 403
+
+
+@app.errorhandler(413)
+def _entity_too_large(_err):
+    # Preserve H5 error shape (JSON, error string field) even for
+    # Flask's built-in 413 response.
+    return jsonify({"error": "request body too large (10MB cap)"}), 413
 
 
 # Register blueprints
