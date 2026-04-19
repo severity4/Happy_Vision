@@ -18,6 +18,21 @@ log = setup_logger("metadata_writer")
 EXIFTOOL_READ_TIMEOUT_SEC = 30.0
 
 
+class ExiftoolMissingError(RuntimeError):
+    """Raised when the exiftool binary can't be located / launched.
+
+    Distinct type so the pipeline / API layer can show an actionable
+    install hint instead of a generic 'metadata write failed'. The
+    default message includes the Homebrew one-liner because that's how
+    every macOS dogfood machine in映奧 installs it."""
+
+    def __init__(self, message: str | None = None):
+        super().__init__(
+            message
+            or "exiftool not found. Install with: brew install exiftool"
+        )
+
+
 def _get_exiftool_cmd() -> str:
     """Find exiftool binary, checking PyInstaller bundle first."""
     if getattr(sys, "frozen", False):
@@ -25,6 +40,21 @@ def _get_exiftool_cmd() -> str:
         if bundled.exists():
             return str(bundled)
     return "exiftool"
+
+
+def check_exiftool_available() -> bool:
+    """Lightweight probe: is exiftool launchable from the current PATH /
+    bundle? Returns True/False. Safe to call on every UI load — does one
+    `-ver` invocation capped at 2s. Does NOT raise."""
+    cmd = _get_exiftool_cmd()
+    try:
+        proc = subprocess.run(
+            [cmd, "-ver"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    return proc.returncode == 0
 
 
 def build_exiftool_args(result: dict) -> list[str]:
@@ -169,19 +199,25 @@ class ExiftoolBatch:
     def _spawn(self) -> None:
         """Start a fresh exiftool -stay_open session. Safe to call again after
         a previous session died or was killed on stall — drains the old
-        queue, spins up a new Popen + reader thread."""
+        queue, spins up a new Popen + reader thread.
+
+        Raises ExiftoolMissingError if the binary can't be found — caller
+        can show an actionable install hint instead of FileNotFoundError."""
         # Fresh queue so leftover lines from a previous session don't poison
         # the new one (the old reader will drop its EOF sentinel, which is
         # fine because we won't be consuming from it).
         self._output_queue = queue.Queue()
-        self._proc = subprocess.Popen(
-            [_get_exiftool_cmd(), "-stay_open", "True", "-@", "-"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                [_get_exiftool_cmd(), "-stay_open", "True", "-@", "-"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError as e:
+            raise ExiftoolMissingError() from e
         # Background reader drains stdout into the queue so the main thread
         # can wait with a timeout. Avoids the select/TextIOWrapper-buffer
         # trap where select on the raw fd misses data already buffered in
