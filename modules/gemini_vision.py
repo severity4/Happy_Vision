@@ -17,6 +17,25 @@ from modules import rate_limiter
 
 log = setup_logger("gemini_vision")
 
+
+class InvalidAPIKeyError(Exception):
+    """Gemini rejected the API key (401 / API_KEY_INVALID / UNAUTHENTICATED /
+    PERMISSION_DENIED). Retrying won't help — the whole batch should halt
+    so the user can fix their key instead of churning through N photos
+    that would all fail identically."""
+
+
+# Substrings in the error message that unambiguously mean "the key is bad".
+# Kept narrow on purpose: matching just "401" would false-positive on error
+# descriptions that happen to contain that number.
+_AUTH_FATAL_MARKERS = (
+    "API_KEY_INVALID",
+    "API key not valid",
+    "UNAUTHENTICATED",
+    "PERMISSION_DENIED",
+)
+
+
 # Module-level cache: one genai.Client per api_key, reused across calls.
 _client_cache: dict[str, genai.Client] = {}
 _client_cache_lock = threading.Lock()
@@ -247,8 +266,19 @@ def analyze_photo(
             log.warning("Failed to parse response for %s", photo_path)
             return None, None
 
+        except InvalidAPIKeyError:
+            # Already classified as fatal — re-raise so pipeline can halt.
+            raise
         except Exception as e:
             error_str = str(e)
+            # Auth / permission failures are terminal: retrying with the same
+            # bad key just burns time. Signal the caller (pipeline) to stop
+            # the whole batch rather than returning (None, None) — which
+            # would cause us to keep calling Gemini for each remaining photo.
+            if any(m in error_str for m in _AUTH_FATAL_MARKERS):
+                log.error("Fatal auth error for %s (halting batch): %s",
+                          photo_path, error_str)
+                raise InvalidAPIKeyError(error_str) from e
             retryable_markers = (
                 "429", "500", "502", "503", "504",
                 "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED",

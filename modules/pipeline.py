@@ -8,7 +8,7 @@ from pathlib import Path
 
 from modules import gemini_batch
 from modules.event_store import EventStore
-from modules.gemini_vision import analyze_photo
+from modules.gemini_vision import InvalidAPIKeyError, analyze_photo
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args
 from modules.pricing import calc_cost_usd
 from modules.result_store import ResultStore
@@ -136,7 +136,34 @@ def run_pipeline(
             return None
 
         analysis_started = time.perf_counter()
-        result, usage = analyze_photo(photo_path, api_key=api_key, model=model, max_size=image_max_size)
+        try:
+            result, usage = analyze_photo(photo_path, api_key=api_key, model=model, max_size=image_max_size)
+        except InvalidAPIKeyError as e:
+            # Bad key — halting the whole run is the correct UX.
+            # Mark THIS photo failed with a clear reason, then cancel state
+            # so remaining photos don't even start. Prior successful photos
+            # stay persisted for resume.
+            analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
+            state.cancel()
+            err_msg = f"Invalid API key: {e}"
+            with lock:
+                store.mark_failed(photo_path, err_msg)
+                failed_count += 1
+                callbacks.on_error(photo_path, err_msg)
+                events.add_event(
+                    "analysis_photo_failed",
+                    folder=folder,
+                    file_path=photo_path,
+                    details={
+                        "analyze_ms": analyze_ms,
+                        "error_stage": "auth",
+                        "fatal": True,
+                    },
+                )
+                done_count += 1
+                callbacks.on_progress(done_count, total, photo_path)
+            log.error("Halting pipeline: %s", err_msg)
+            return None
         analyze_ms = round((time.perf_counter() - analysis_started) * 1000)
 
         cost_usd = None
