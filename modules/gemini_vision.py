@@ -120,25 +120,53 @@ Respond ONLY with valid JSON matching the required schema."""
 
 
 def resize_for_api(photo_bytes: bytes, max_size: int = DEFAULT_MAX_IMAGE_SIZE) -> bytes:
-    """Resize photo so the long edge is at most max_size pixels. Returns JPEG bytes."""
+    """Resize photo so the long edge is at most max_size pixels.
+
+    ALWAYS returns JPEG bytes — even if the input is a PNG / TIFF / HEIC
+    file that's been renamed to `.jpg`, or a genuine JPG that doesn't need
+    resizing. This guarantees the `mime_type="image/jpeg"` tag we hand to
+    Gemini matches the payload; otherwise a PNG-labelled-as-JPEG would
+    silently fail (or worse, get miscategorized by the API)."""
     img = Image.open(io.BytesIO(photo_bytes))
     w, h = img.size
-    if max(w, h) <= max_size:
+
+    # Fast path: a small, already-JPEG input needs no work. PIL exposes the
+    # original format via img.format — "JPEG" is the only string we short-
+    # circuit on, and RGBA mode (which JPEG can't express natively) is
+    # excluded so we never smuggle out a non-JPEG payload.
+    if max(w, h) <= max_size and img.format == "JPEG" and img.mode in ("RGB", "L"):
         return photo_bytes
 
-    if w >= h:
-        new_w = max_size
-        new_h = int(h * max_size / w)
+    # Compute target size (no-op if already within max_size — we still
+    # re-encode below to normalize format to JPEG).
+    if max(w, h) > max_size:
+        if w >= h:
+            new_w = max_size
+            new_h = int(h * max_size / w)
+        else:
+            new_h = max_size
+            new_w = int(w * max_size / h)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
     else:
-        new_h = max_size
-        new_w = int(w * max_size / h)
+        new_w, new_h = w, h
 
-    img = img.resize((new_w, new_h), Image.LANCZOS)
+    # JPEG can't encode alpha. Flatten RGBA / LA onto a white background
+    # rather than raising OSError — losing transparency is the lesser evil
+    # for photo analysis, and matches what most editors do on export.
+    if img.mode in ("RGBA", "LA"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        mask = img.split()[-1]  # alpha channel
+        background.paste(img.convert("RGB"), mask=mask)
+        img = background
+    elif img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     original_kb = len(photo_bytes) / 1024
     resized_kb = buf.tell() / 1024
-    log.debug("Resized %dx%d → %dx%d (%.0fKB → %.0fKB)", w, h, new_w, new_h, original_kb, resized_kb)
+    log.debug("Normalized %dx%d → %dx%d (%.0fKB → %.0fKB)",
+              w, h, new_w, new_h, original_kb, resized_kb)
     return buf.getvalue()
 
 
