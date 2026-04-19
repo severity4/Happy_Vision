@@ -49,8 +49,10 @@ class ResultStore:
             test_conn = sqlite3.connect(str(path))
             test_conn.close()
             return path
-        except sqlite3.Error as e:
-            # Same durable fallback as __init__ — never /tmp.
+        except (sqlite3.Error, OSError) as e:
+            # Same durable fallback as __init__ — never /tmp. OSError
+            # covers the rare case where `path.parent` exists and is a
+            # file (mkdir raises FileExistsError, not sqlite3.Error).
             fallback_dir = Path.home() / ".happy-vision-fallback"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             log.warning(
