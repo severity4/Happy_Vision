@@ -73,9 +73,14 @@ def build_exiftool_args(result: dict) -> list[str]:
     for person in result.get("identified_people", []):
         if person not in all_keywords:
             all_keywords.append(person)
+    # Use `+=` rather than `=` for list-type tags so we don't wipe user-
+    # curated keywords (e.g., Lightroom-imported "wedding, bride"). The
+    # trade-off is that re-running Happy Vision on the same photo would
+    # dup these entries — folder_watcher's HappyVisionProcessed check is
+    # what prevents that in practice.
     for kw in all_keywords:
-        args.append(f"-IPTC:Keywords={kw}")
-        args.append(f"-XMP:Subject={kw}")
+        args.append(f"-IPTC:Keywords+={kw}")
+        args.append(f"-XMP:Subject+={kw}")
 
     if result.get("category"):
         args.append(f"-XMP:Category={result['category']}")

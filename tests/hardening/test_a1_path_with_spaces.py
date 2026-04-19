@@ -152,5 +152,6 @@ def test_exiftool_args_allow_value_containing_spaces():
     # quotes). Shell-quoting here would double-escape when exiftool reads
     # from stdin.
     assert "-IPTC:Headline=My Title With Spaces" in args
-    # Keyword with space must survive as a single arg.
-    assert "-IPTC:Keywords=kw one" in args
+    # Keyword with space must survive as a single arg. B5: list-type tags
+    # use `+=` (merge) so user's manual keywords aren't wiped.
+    assert "-IPTC:Keywords+=kw one" in args

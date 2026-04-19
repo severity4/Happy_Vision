@@ -153,10 +153,11 @@ def test_exiftool_args_carry_cjk_values_verbatim():
     assert "-IPTC:Headline=阿伯演講" in args
     assert "-IPTC:Caption-Abstract=一位年長男性在舞台" in args
     # Keywords emit both IPTC:Keywords and XMP:Subject per entry.
-    assert "-IPTC:Keywords=講者" in args
-    assert "-IPTC:Keywords=セレモニー" in args
-    assert "-IPTC:Keywords=축하" in args
+    # B5: list-type tags use `+=` (merge) so user's manual keywords aren't wiped.
+    assert "-IPTC:Keywords+=講者" in args
+    assert "-IPTC:Keywords+=セレモニー" in args
+    assert "-IPTC:Keywords+=축하" in args
     # identified_people are merged into keywords.
-    assert "-IPTC:Keywords=張大明" in args
+    assert "-IPTC:Keywords+=張大明" in args
     # OCR goes to XMP:Comment
     assert "-XMP:Comment=映奧創意" in args

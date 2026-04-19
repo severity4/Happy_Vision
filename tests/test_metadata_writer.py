@@ -21,9 +21,11 @@ def test_build_exiftool_args_basic():
     args = build_exiftool_args(result)
     assert "-IPTC:Headline=Speaker on stage" in args
     assert "-IPTC:Caption-Abstract=A keynote speaker addresses the audience." in args
-    assert "-IPTC:Keywords=conference" in args
-    assert "-IPTC:Keywords=keynote" in args
-    assert "-IPTC:Keywords=Jensen Huang" in args
+    # B5: list-type tags (Keywords, Subject) use `+=` to merge with user's
+    # pre-existing tags instead of wiping them.
+    assert "-IPTC:Keywords+=conference" in args
+    assert "-IPTC:Keywords+=keynote" in args
+    assert "-IPTC:Keywords+=Jensen Huang" in args
     assert "-XMP:Category=ceremony" in args
     assert "-XMP:Scene=formal" in args
     assert any("INOUT Creative" in a for a in args)
@@ -55,8 +57,9 @@ def test_build_exiftool_args_people_added_to_keywords():
         "identified_people": ["Jensen Huang", "Lisa Su"],
     }
     args = build_exiftool_args(result)
-    keyword_args = [a for a in args if a.startswith("-IPTC:Keywords=")]
-    keyword_values = [a.split("=", 1)[1] for a in keyword_args]
+    # B5: list-type tags use `+=` (merge). Parse from after the `+=`.
+    keyword_args = [a for a in args if a.startswith("-IPTC:Keywords+=")]
+    keyword_values = [a.split("+=", 1)[1] for a in keyword_args]
     assert "Jensen Huang" in keyword_values
     assert "Lisa Su" in keyword_values
     assert "speech" in keyword_values
