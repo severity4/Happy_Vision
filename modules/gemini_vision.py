@@ -327,6 +327,21 @@ def analyze_photo(
                 "429", "500", "502", "503", "504",
                 "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED",
                 "UNAVAILABLE", "INTERNAL",
+                # Network / DNS / socket transients. Offline wifi,
+                # firewall blip, VPN re-handshake — transient, retry
+                # rather than hard-failing the photo on first touch.
+                # Lowercase checked below with a second `in` via .lower()
+                # since socket error strings vary by platform (macOS
+                # "getaddrinfo failed", Linux "Name or service not known").
+                "getaddrinfo",
+                "Name or service not known",
+                "Temporary failure in name resolution",
+                "Could not resolve host",
+                "Connection refused",
+                "Connection reset",
+                "Max retries exceeded",
+                "timed out",
+                "Network is unreachable",
             )
             if any(m in error_str for m in retryable_markers):
                 wait = 2 ** attempt
