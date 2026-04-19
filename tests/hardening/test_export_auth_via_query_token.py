@@ -15,8 +15,6 @@ frontend fix can't silently regress if someone drops the token later.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from modules import auth
@@ -28,13 +26,10 @@ def raw_client(monkeypatch):
     """Test client WITHOUT the conftest auth auto-injection, so we can
     verify the raw backend behavior on missing / valid / bogus tokens."""
     _app.config["TESTING"] = True
-    # Undo the conftest fixture that injects X-HV-Token + Host
+    # Undo the conftest fixture that injects X-HV-Token + Host — we
+    # re-apply only a Host header (required by auth allowlist) so we
+    # test token logic in isolation.
     from flask.testing import FlaskClient
-
-    # Replace FlaskClient.open with the pristine Flask impl, re-fetching
-    # it from Flask after monkeypatch-undo. We re-apply only a Host header
-    # (required by auth allowlist) so we test token logic in isolation.
-    original = FlaskClient.open.__wrapped__ if hasattr(FlaskClient.open, "__wrapped__") else None
 
     def _raw_open(self, *args, **kwargs):
         headers = dict(kwargs.pop("headers", {}) or {})
