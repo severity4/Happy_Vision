@@ -113,6 +113,9 @@ def test_api_estimate_returns_full_payload(tmp_path):
     import web_ui
     for i in range(5):
         _write_jpeg(tmp_path / f"p{i}.jpg")
+    # v0.10.1 path allowlist: test tmp_path is outside home, so register it
+    # explicitly — same thing the /api/watch/start flow does.
+    web_ui.register_allowed_root(tmp_path)
     client = web_ui.app.test_client()
     r = client.get(f"/api/batch/estimate?folder={tmp_path}&model=lite&image_max_size=1024")
     assert r.status_code == 200

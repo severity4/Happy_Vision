@@ -37,6 +37,46 @@ _sse_queues: list[queue.Queue] = []
 _sse_lock = threading.Lock()
 
 
+def _require_allowed_folder(folder: str) -> tuple[Path | None, tuple[dict, int] | None]:
+    """Validate `folder` is a real directory AND inside the user's path
+    allowlist (home + anything registered via register_allowed_root).
+
+    v0.10.0 security review flagged that the batch endpoints trusted any
+    absolute path — an attacker with the session token could point at
+    ~/.ssh or /private/etc and base64-exfiltrate every JPG via the JSONL
+    upload to Google. Fix mirrors /api/browse + /api/photo which have used
+    _path_is_allowed since v0.3.4.
+
+    Returns (resolved_path, None) on success OR (None, (error_json, status))."""
+    if not folder:
+        return None, ({"error": "folder is required"}, 400)
+    raw = Path(folder)
+    if not raw.is_dir():
+        return None, ({"error": f"not a directory: {folder}"}, 400)
+    # Lazy-import to avoid circular (web_ui imports batch_bp).
+    from web_ui import _path_is_allowed, register_allowed_root
+    if not _path_is_allowed(raw):
+        return None, ({
+            "error": "folder_not_allowed",
+            "message": (
+                "此資料夾不在允許清單。請先到「設定」或「監控」頁面明確"
+                "開啟這個資料夾,再送出批次。"
+            ),
+        }, 403)
+    resolved = raw.expanduser().resolve()
+    # Re-register so future requests under this root pass the check even
+    # if the user rebooted the app (allowlist is in-memory only).
+    register_allowed_root(resolved)
+    return resolved, None
+
+
+def _coerce_int(v, default: int) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def broadcast_batch_event(payload: dict) -> None:
     """Called by the background BatchMonitor to push a state change."""
     msg = f"event: {payload.get('type', 'batch')}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -62,26 +102,32 @@ def estimate_submission():
     Response is a CostEstimate.to_dict() — frontend renders this in the
     confirmation modal so users don't accidentally burn budget on 150k
     photos when they meant a test folder."""
-    folder = (request.args.get("folder") or "").strip()
-    if not folder:
-        return jsonify({"error": "folder is required"}), 400
-    if not Path(folder).is_dir():
-        return jsonify({"error": f"not a directory: {folder}"}), 400
+    folder_raw = (request.args.get("folder") or "").strip()
+    folder, err = _require_allowed_folder(folder_raw)
+    if err is not None:
+        body, status = err
+        return jsonify(body), status
 
     config = load_config()
     model = request.args.get("model") or config.get("model", "lite")
-    image_max_size = int(request.args.get("image_max_size") or config.get("image_max_size", 3072))
+    image_max_size = _coerce_int(
+        request.args.get("image_max_size"),
+        int(config.get("image_max_size", 3072)),
+    )
     skip_existing_arg = request.args.get("skip_existing")
     skip_existing = (
         skip_existing_arg.lower() in ("1", "true", "yes")
         if skip_existing_arg is not None
         else bool(config.get("skip_existing", True))
     )
-    min_rating = int(request.args.get("min_rating") or config.get("min_rating", 0))
+    min_rating = _coerce_int(
+        request.args.get("min_rating"),
+        int(config.get("min_rating", 0)),
+    )
 
     try:
         est = estimate_batch_cost(
-            folder=folder,
+            folder=str(folder),
             model=model,
             image_max_size=image_max_size,
             skip_existing=skip_existing,
@@ -96,11 +142,11 @@ def estimate_submission():
 @batch_bp.route("/submit", methods=["POST"])
 def submit_batch():
     data = request.get_json(silent=True) or {}
-    folder = (data.get("folder") or "").strip()
-    if not folder:
-        return jsonify({"error": "folder is required"}), 400
-    if not Path(folder).is_dir():
-        return jsonify({"error": f"not a directory: {folder}"}), 400
+    folder_raw = (data.get("folder") or "").strip()
+    folder, err = _require_allowed_folder(folder_raw)
+    if err is not None:
+        body, status = err
+        return jsonify(body), status
 
     config = load_config()
     api_key = (config.get("gemini_api_key") or "").strip()
@@ -108,7 +154,10 @@ def submit_batch():
         return jsonify({"error": "Gemini API key not configured"}), 400
 
     model = data.get("model") or config.get("model", "lite")
-    image_max_size = int(data.get("image_max_size") or config.get("image_max_size", 3072))
+    image_max_size = _coerce_int(
+        data.get("image_max_size"),
+        int(config.get("image_max_size", 3072)),
+    )
     write_metadata = bool(
         data.get("write_metadata")
         if "write_metadata" in data
@@ -133,7 +182,7 @@ def submit_batch():
 
     try:
         summary = pipeline.submit_batch_run(
-            folder=folder,
+            folder=str(folder),
             api_key=api_key,
             model=model,
             image_max_size=image_max_size,
@@ -188,6 +237,17 @@ def get_job(job_id: str):
 
 @batch_bp.route("/jobs/<path:job_id>/cancel", methods=["POST"])
 def cancel_job(job_id: str):
+    # v0.10.1 security: verify the job exists locally before forwarding the
+    # cancel to Gemini. Prevents a token-holding caller from cancelling
+    # unrelated Gemini jobs on the user's API key (e.g. from other apps
+    # sharing the same Google Cloud project).
+    store = ResultStore()
+    try:
+        if store.get_batch_job(job_id) is None:
+            return jsonify({"error": "not_found"}), 404
+    finally:
+        store.close()
+
     config = load_config()
     api_key = (config.get("gemini_api_key") or "").strip()
     if not api_key:
@@ -209,8 +269,13 @@ def cancel_job(job_id: str):
 
 @batch_bp.route("/jobs/<path:job_id>", methods=["DELETE"])
 def delete_job(job_id: str):
+    # v0.10.1 security: 404 when the job isn't known locally, so callers
+    # can't use DELETE as an oracle for arbitrary job IDs. Also avoids
+    # silently "succeeding" on typo'd IDs.
     store = ResultStore()
     try:
+        if store.get_batch_job(job_id) is None:
+            return jsonify({"error": "not_found"}), 404
         store.delete_batch_job(job_id)
     finally:
         store.close()

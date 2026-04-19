@@ -120,26 +120,41 @@ class BatchMonitor:
         output_file = state_info["output_file"]
         err = state_info["error"]
 
-        if state == job_row["status"]:
-            return  # nothing changed
-
-        log.info("Batch %s: %s → %s", job_id, job_row["status"], state)
-        store.update_batch_job_status(
-            job_id, state,
-            output_file_id=output_file,
-            error_message=err,
+        state_changed = state != job_row["status"]
+        # Recovery path (v0.10.1): if the job is already SUCCEEDED in our DB
+        # but materialisation never finished (exiftool missing, app killed
+        # mid-loop, DB lock contention, etc), re-enter materialise on later
+        # ticks until all items are in a terminal state. Previously the
+        # `state == job_row["status"]` early-return meant such a job was
+        # permanently stuck with orphaned pending items.
+        is_success = state in ("JOB_STATE_SUCCEEDED", "JOB_STATE_PARTIALLY_SUCCEEDED")
+        completed_so_far = int(job_row.get("completed_count") or 0)
+        failed_so_far = int(job_row.get("failed_count") or 0)
+        needs_materialise = is_success and (
+            completed_so_far + failed_so_far < int(job_row.get("photo_count") or 0)
         )
-        self._emit({
-            "type": "batch_state",
-            "job_id": job_id,
-            "state": state,
-            "state_display": STATE_DISPLAY.get(state, state),
-            "error": err,
-        })
 
-        if state in ("JOB_STATE_SUCCEEDED", "JOB_STATE_PARTIALLY_SUCCEEDED"):
+        if not state_changed and not needs_materialise:
+            return  # steady state — nothing to do
+
+        if state_changed:
+            log.info("Batch %s: %s → %s", job_id, job_row["status"], state)
+            store.update_batch_job_status(
+                job_id, state,
+                output_file_id=output_file,
+                error_message=err,
+            )
+            self._emit({
+                "type": "batch_state",
+                "job_id": job_id,
+                "state": state,
+                "state_display": STATE_DISPLAY.get(state, state),
+                "error": err,
+            })
+
+        if is_success:
             self._materialise_results(store, job_row, api_key)
-        elif state in ("JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"):
+        elif state_changed and state in ("JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"):
             # Roll item rows to a terminal state so the UI can show them.
             for item in store.get_batch_items(job_id):
                 if item["status"] == "pending":
@@ -147,23 +162,51 @@ class BatchMonitor:
                     store.mark_failed(item["file_path"], f"Batch job {state}")
 
     def _materialise_results(self, store: ResultStore, job_row: dict, api_key: str) -> None:
-        """Fetch output JSONL, save results, write metadata. Idempotent: rows
-        already completed in the `results` table are skipped."""
+        """Fetch output JSONL, save results, write metadata.
+
+        Item-level idempotent (v0.10.1): items whose batch_items.status is
+        already 'completed' are skipped entirely — no re-IPTC-write on
+        retry. Code reviewer flagged the v0.9.x version as destructive on
+        cold-boot because `save_result` uses INSERT OR REPLACE and
+        `-overwrite_original` would stomp user-edited IPTC.
+
+        Also wraps ExiftoolBatch init so a missing exiftool binary doesn't
+        kill the tick — the job stays SUCCEEDED with completed<photo_count,
+        so the next tick re-enters this method once exiftool is fixed."""
         job_id = job_row["job_id"]
         items = store.get_batch_items(job_id)
         by_key = {it["request_key"]: it["file_path"] for it in items}
+        already_done = {it["request_key"] for it in items if it["status"] == "completed"}
         model = job_row["model"]
         write_metadata = bool(job_row.get("write_metadata"))
 
         events = EventStore()
-        batch_writer: ExiftoolBatch | None = ExiftoolBatch() if write_metadata else None
-        completed = 0
-        failed = 0
+        batch_writer: ExiftoolBatch | None = None
+        if write_metadata:
+            try:
+                batch_writer = ExiftoolBatch()
+            except Exception as e:  # noqa: BLE001
+                log.error(
+                    "ExiftoolBatch init failed for job %s: %s. Leaving "
+                    "items pending — will retry on next tick.",
+                    job_id, e,
+                )
+                events.close()
+                return
+        # Start counters from already-persisted state so the final
+        # update_batch_job_counts call reflects total progress, not just
+        # this tick's increments.
+        completed = sum(1 for it in items if it["status"] == "completed")
+        failed = sum(1 for it in items if it["status"] == "failed")
         try:
             for result in gemini_batch.fetch_results(job_id, api_key, model=model):
                 path = by_key.get(result.key)
                 if path is None:
                     log.warning("Batch %s: unknown key %s in output, skipping", job_id, result.key)
+                    continue
+                if result.key in already_done:
+                    # v0.10.1 idempotency: don't re-write IPTC for items we
+                    # already finished. Counter was initialised from DB above.
                     continue
                 if result.result is None:
                     store.mark_failed(path, f"Batch: {result.error or 'unknown error'}")

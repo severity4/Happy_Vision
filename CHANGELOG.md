@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.10.1 — 2026-04-19 · Security + Resumability hotfix(三方 audit + 一個前端 bug)
+
+跑 Code Reviewer + SRE + Security 三組 agent 掃 v0.9-v0.10,抓到 CRITICAL/HIGH 五個。再加使用者回報一個前端 bug。都修。
+
+### CRITICAL · 路徑 allowlist 被繞過(Security)
+`/api/batch/submit` 和 `/api/batch/estimate` 沒檢查 `_path_is_allowed`。拿到 session token 的話可以指向 `~/.ssh` 把 JPG base64 塞進 JSONL 上傳到 Google。補 `_require_allowed_folder()` helper 照抄 `/api/browse` 的 pattern,home 或 registered root 外一律 403。
+
+### HIGH · Materialise 不 resumable(Code Reviewer + SRE)
+三個問題本質是同一個:
+- mid-run crash 後 SUCCEEDED job 被 `list_batch_jobs(active_only=True)` 過濾掉,剩下 pending items 永遠沒處理
+- Cold boot 重跑整個 loop,`-overwrite_original` 把使用者編輯過的 IPTC 蓋掉
+- `ExiftoolBatch()` init 失敗(exiftool 不在)直接拋例外 → 整個 tick 掛掉 → job 永遠卡住
+
+修:
+- `_materialise_results` 跳過 `batch_items.status == 'completed'` 的,counters 從 DB 起算不是 0
+- `_poll_one` 加 `needs_materialise` recovery flag:SUCCEEDED 但 `completed + failed < photo_count` 時再進 materialise
+- ExiftoolBatch init 用 try/except 包,失敗 log + return,下次 tick 再試
+
+### MEDIUM · Cancel/Delete/Get 跨帳號污染(Security)
+`/api/batch/jobs/<id>/cancel` 把任何 job_id 直接送到 Gemini。token 外洩時可以干掉同 API key 下其他專案的 job。修成先查本地 `batch_jobs`,不在就 404。DELETE 也加 404 守門。
+
+### LOW · `int(request.args.get(...))` 可能 500(Security)
+`image_max_size=abc` 會拋 ValueError。換成 settings.py 一樣的 `_coerce_int`,壞值回 default 不崩。
+
+### 前端 bug · 跳過引導按鈕失效(使用者回報)
+`localStorage.getItem()` 不是 Vue reactive,`open` computed 沒追蹤它。點跳過 → localStorage 寫了,但 computed 沒重算 → wizard 不關。改用 `dismissed = ref(localStorage.getItem(...))`,skip/finish/startAndClose 同步更新 ref。`watch(props.force)` 在 force 翻 true 時 reset ref,讓 Settings「再跑一次」還能重開。
+
+### 測試
+- `tests/test_batch_security.py` 8 tests(path allowlist 三種路徑、int coerce fallback、job ownership 404、known job 放行)
+- `tests/test_batch_monitor_resumable.py` 4 tests(skip completed items、exiftool init 失敗不崩、recovery re-entry、steady state early return)
+- 347 passing(v0.10.0 是 335,+12 新)
+
 ## v0.10.0 — 2026-04-19 · Batch 成本預覽 + 確認對話框
 
 v0.9 系列讓批次能跑穩了,現在讓使用者「送出前看到費用再按下去」。再也沒有不小心扛 $84 的事情。

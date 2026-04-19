@@ -188,6 +188,12 @@ const browserFolders = computed(() =>
   browserData.value.items.filter(i => i.type === 'folder')
 )
 
+// Dismissal state. localStorage is NOT reactive — if the computed below
+// calls `localStorage.getItem` directly, setting the flag in `skip()` won't
+// re-trigger the compute and the wizard stays open. Track it as a ref.
+// Bug: 跳過引導 按鈕失效 (2026-04-19) — fixed here.
+const dismissed = ref(localStorage.getItem(DISMISS_KEY) === '1')
+
 // Show logic:
 //  - force=true (triggered from Settings) always opens
 //  - Otherwise, show only when settings are loaded AND user has no API key
@@ -195,10 +201,18 @@ const browserFolders = computed(() =>
 const open = computed(() => {
   if (props.force) return true
   if (!settings.loaded) return false
-  if (localStorage.getItem(DISMISS_KEY) === '1') return false
+  if (dismissed.value) return false
   const needsKey = !settings.settings.gemini_api_key_set
   const needsFolder = !settings.settings.watch_folder
   return needsKey || needsFolder
+})
+
+// When the parent forces the wizard back on (Settings "再跑一次"), clear
+// the local dismissed ref too — otherwise the wizard would flash open
+// because of `force`, then latch closed as soon as force flips back to
+// false after `emit('close')` resolves.
+watch(() => props.force, (forced) => {
+  if (forced) dismissed.value = false
 })
 
 // When opening, fast-forward to the first unfinished step so users who
@@ -298,11 +312,13 @@ function back() {
 
 function skip() {
   localStorage.setItem(DISMISS_KEY, '1')
+  dismissed.value = true
   emit('close')
 }
 
 function finishWithoutStart() {
   localStorage.setItem(DISMISS_KEY, '1')
+  dismissed.value = true
   emit('close')
 }
 
@@ -317,6 +333,7 @@ async function startAndClose() {
     }
     pushToast('開始監控', { kind: 'success' })
     localStorage.setItem(DISMISS_KEY, '1')
+    dismissed.value = true
     emit('close')
   } catch (e) {
     step3Error.value = '啟動失敗，請到監控頁手動開始'
