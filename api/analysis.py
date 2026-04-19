@@ -6,9 +6,10 @@ import threading
 
 from flask import Blueprint, request, jsonify, Response
 
+from modules import gemini_batch, pipeline as pipeline_mod
 from modules.config import load_config
 from modules.event_store import EventStore
-from modules.pipeline import run_pipeline, PipelineCallbacks, PipelineState
+from modules.pipeline import run_pipeline, PipelineCallbacks, PipelineState, scan_photos
 from modules.logger import setup_logger
 
 log = setup_logger("api_analysis")
@@ -65,6 +66,40 @@ def start_analysis():
     concurrency = data.get("concurrency", config.get("concurrency", 5))
     skip_existing = data.get("skip_existing", config.get("skip_existing", False))
     write_metadata = data.get("write_metadata", config.get("write_metadata", False))
+
+    # v0.9.0: Batch routing. If the user opted into batch mode (or auto
+    # triggered by threshold), divert to the async batch flow instead of
+    # running the realtime pipeline. Caller gets {"status": "batch_submitted",
+    # "jobs": [...]} so the UI can show the "check back later" panel.
+    batch_mode = config.get("batch_mode", "off")
+    batch_threshold = int(config.get("batch_threshold", 500))
+    if batch_mode != "off":
+        photos = scan_photos(folder)
+        decision = pipeline_mod.route_mode(batch_mode, len(photos), batch_threshold)
+        if decision == "batch":
+            try:
+                summary = pipeline_mod.submit_batch_run(
+                    folder=folder,
+                    api_key=api_key,
+                    model=model,
+                    image_max_size=int(config.get("image_max_size", 3072)),
+                    write_metadata=bool(write_metadata),
+                    skip_existing=bool(skip_existing),
+                )
+            except gemini_batch.TierRequiredError as e:
+                return jsonify({
+                    "error": "tier_required",
+                    "message": str(e),
+                    "billing_url": gemini_batch.BILLING_URL,
+                }), 402
+            except Exception as e:  # noqa: BLE001
+                log.exception("Batch submit via analysis/start failed")
+                return jsonify({"error": "submit_failed", "message": str(e)}), 500
+            _broadcast_sse("batch_submitted", {
+                "folder": folder,
+                **summary,
+            })
+            return jsonify({"status": "batch_submitted", **summary})
     with EventStore() as events:
         events.add_event(
             "analysis_api_start",

@@ -1,10 +1,12 @@
 """modules/pipeline.py — Orchestrator: scan folder, run analysis, coordinate modules"""
 
 import concurrent.futures
+import os
 import threading
 import time
 from pathlib import Path
 
+from modules import gemini_batch
 from modules.event_store import EventStore
 from modules.gemini_vision import analyze_photo
 from modules.metadata_writer import ExiftoolBatch, build_exiftool_args
@@ -224,3 +226,89 @@ def run_pipeline(
     callbacks.on_complete(total, failed_count)
     log.info("Pipeline complete: %d analyzed, %d failed", len(results), failed_count)
     return results
+
+
+def submit_batch_run(
+    folder: str,
+    api_key: str,
+    model: str = "lite",
+    image_max_size: int = 3072,
+    write_metadata: bool = False,
+    skip_existing: bool = True,
+    db_path: Path | str | None = None,
+) -> dict:
+    """Scan `folder`, chunk into batch jobs, submit each to Gemini Batch API,
+    persist metadata, and return a summary.
+
+    Returns {jobs: [{job_id, photo_count, payload_bytes, ...}],
+             total_photos, skipped, chunks}.
+    Raises gemini_batch.TierRequiredError when a free-tier account tries."""
+    photos = scan_photos(folder)
+    store = ResultStore(db_path)
+    try:
+        if skip_existing:
+            to_process = [p for p in photos if not store.is_processed(p)]
+        else:
+            to_process = photos
+        skipped = len(photos) - len(to_process)
+        if not to_process:
+            return {"jobs": [], "total_photos": 0, "skipped": skipped, "chunks": 0}
+
+        chunks = gemini_batch.chunk_photos(to_process, gemini_batch.MAX_PHOTOS_PER_BATCH)
+        jobs_meta = []
+        for idx, chunk in enumerate(chunks, start=1):
+            jsonl_path, key_map, payload_bytes = gemini_batch.build_jsonl_for_chunk(
+                chunk, model=model, max_size=image_max_size,
+            )
+            display = f"HappyVision {Path(folder).name} chunk {idx}/{len(chunks)}"
+            try:
+                submit = gemini_batch.submit_batch(
+                    jsonl_path, api_key=api_key, model=model,
+                    display_name=display,
+                )
+                store.create_batch_job(
+                    job_id=submit.job_id,
+                    folder=folder,
+                    model=model,
+                    items=key_map,
+                    input_file_id=submit.input_file_id,
+                    payload_bytes=submit.payload_bytes or payload_bytes,
+                    display_name=display,
+                    write_metadata=write_metadata,
+                    image_max_size=image_max_size,
+                )
+                jobs_meta.append({
+                    "job_id": submit.job_id,
+                    "photo_count": len(key_map),
+                    "payload_bytes": submit.payload_bytes or payload_bytes,
+                    "display_name": display,
+                })
+                log.info(
+                    "Submitted batch %s: %d photos (chunk %d/%d)",
+                    submit.job_id, len(key_map), idx, len(chunks),
+                )
+            finally:
+                # Always clean the local JSONL — it's 100MB+ of base64 we don't
+                # need on disk after upload. Ignore missing-file races.
+                try:
+                    os.unlink(jsonl_path)
+                except OSError:
+                    pass
+        return {
+            "jobs": jobs_meta,
+            "total_photos": len(to_process),
+            "skipped": skipped,
+            "chunks": len(chunks),
+        }
+    finally:
+        store.close()
+
+
+def route_mode(batch_mode: str, photo_count: int, threshold: int) -> str:
+    """Decide 'realtime' vs 'batch' given config. Pure, easy to test."""
+    mode = (batch_mode or "off").lower()
+    if mode == "always":
+        return "batch"
+    if mode == "auto" and photo_count >= max(1, int(threshold)):
+        return "batch"
+    return "realtime"

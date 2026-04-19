@@ -293,6 +293,53 @@
         <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ minRatingDescription }}</p>
       </section>
 
+      <!-- Gemini Batch API mode (v0.9.0) -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="batchMode === 'off' ? '' : 'led-accent'"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">BATCH MODE · 省 50% 成本的非同步模式</span>
+          </div>
+          <span class="font-mono text-[11px] font-semibold" :class="batchMode === 'off' ? 'text-text-tertiary' : 'text-accent-violet'">
+            {{ batchModeLabel }}
+          </span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <button
+            v-for="opt in batchModeOptions"
+            :key="opt.value"
+            @click="batchMode = opt.value; save({ batch_mode: opt.value }, 'Batch 模式')"
+            class="font-mono text-[11px] tracking-wider px-3 py-2 rounded transition-colors border"
+            :class="batchMode === opt.value
+              ? 'bg-accent-violet/20 border-accent-violet text-accent-violet'
+              : 'bg-surface-2 border-border-default text-text-secondary hover:text-text-primary'"
+          >{{ opt.label }}</button>
+        </div>
+        <div v-if="batchMode === 'auto'" class="mb-3">
+          <label class="kicker text-text-tertiary mb-2 block">自動切換閾值（張）</label>
+          <input
+            v-model.number="batchThreshold"
+            type="number"
+            min="1"
+            max="50000"
+            @change="save({ batch_threshold: batchThreshold }, '批次閾值')"
+            class="w-full bg-surface-2 border border-border-default rounded px-3 py-2 font-mono text-sm text-text-primary"
+          />
+        </div>
+        <div class="bg-amber-900/20 border border-amber-700/40 rounded p-3 mb-2">
+          <p class="kicker text-amber-300 mb-1">⚠ 需要付費 Tier 1</p>
+          <p class="text-[11px] text-text-secondary leading-relaxed">
+            批次 API 需在 Google AI Studio 綁定信用卡升級到付費方案。免費額度不支援批次。
+            24 小時內完成（通常更快），費用為即時模式的 50%。
+          </p>
+          <button
+            @click="openExternal('https://aistudio.google.com/app/plan_information')"
+            class="mt-2 font-mono text-[10px] tracking-wider text-accent-violet hover:underline"
+          >去 AI Studio 設定付費 →</button>
+        </div>
+        <p class="kicker" style="color: var(--color-text-secondary)">{{ batchModeDescription }}</p>
+      </section>
+
       <!-- Skip existing -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5" id="skip-existing-section">
         <label for="skip" class="flex items-center justify-between cursor-pointer">
@@ -412,8 +459,16 @@ const rpm = ref(60)
 const imageMaxSize = ref(3072)
 const phashThreshold = ref(5)
 const minRating = ref(0)
+const batchMode = ref('off')
+const batchThreshold = ref(500)
 const showAdvanced = ref(false)
 const showDeveloper = ref(false)
+
+const batchModeOptions = [
+  { value: 'off', label: 'OFF' },
+  { value: 'auto', label: 'AUTO' },
+  { value: 'always', label: 'ALWAYS' },
+]
 
 const imageSizeLabels = {
   1024: '最省',
@@ -477,6 +532,17 @@ const phashDescription = computed(() => {
   return `極寬鬆（${n} bits）· 會把不同人物或場景誤判為重複，不建議開這麼高`
 })
 
+const batchModeLabel = computed(() => {
+  const lut = { off: 'OFF · 即時模式', auto: 'AUTO · 按量切換', always: 'ALWAYS · 固定批次' }
+  return lut[batchMode.value] || 'OFF'
+})
+
+const batchModeDescription = computed(() => {
+  if (batchMode.value === 'off') return '即時模式 · 照片送出後幾秒內得到結果（現在的行為）'
+  if (batchMode.value === 'always') return '所有分析走批次 · 24 小時內完成、費用 50%、不能即時看結果'
+  return `當一批 ≥ ${batchThreshold.value} 張時自動切到批次 · 少量照片仍走即時模式`
+})
+
 const minRatingDescription = computed(() => {
   const n = minRating.value
   if (n === 0) return '關閉預篩：資料夾內所有 JPG 都會被分析'
@@ -501,6 +567,10 @@ onMounted(async () => {
     : 3072
   phashThreshold.value = Math.min(16, Math.max(0, store.settings.phash_threshold ?? 5))
   minRating.value = Math.min(5, Math.max(0, store.settings.min_rating ?? 0))
+  batchMode.value = ['off', 'auto', 'always'].includes(store.settings.batch_mode)
+    ? store.settings.batch_mode
+    : 'off'
+  batchThreshold.value = Math.min(50000, Math.max(1, store.settings.batch_threshold ?? 500))
 })
 
 async function saveApiKey() {

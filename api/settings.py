@@ -11,6 +11,11 @@ settings_bp = Blueprint("settings", __name__, url_prefix="/api/settings")
 # long-edge requests that would either crash PIL or silently eat budget.
 ALLOWED_IMAGE_SIZES = {1024, 1536, 2048, 3072}
 ALLOWED_MODELS = {"lite", "flash"}
+# v0.9.0: Gemini Batch API routing.
+#   off    = always use realtime (current behaviour)
+#   auto   = batch when photo count >= batch_threshold, else realtime
+#   always = batch every run (24h SLO, 50% cost, Tier-1 paid account required)
+ALLOWED_BATCH_MODES = {"off", "auto", "always"}
 
 
 def _coerce_int(v, default: int) -> int:
@@ -73,6 +78,19 @@ def update_settings():
     if "min_rating" in data:
         # 0 = disabled (tag everything); 1-5 = Lightroom star threshold
         config["min_rating"] = max(0, min(5, _coerce_int(data["min_rating"], 0)))
+
+    if "batch_mode" in data:
+        bm = str(data["batch_mode"] or "").lower()
+        if bm not in ALLOWED_BATCH_MODES:
+            return jsonify({
+                "error": f"batch_mode must be one of {sorted(ALLOWED_BATCH_MODES)}"
+            }), 400
+        config["batch_mode"] = bm
+
+    if "batch_threshold" in data:
+        # 1 photo is a valid trigger for "auto"; cap at 50k so a typo can't
+        # silently disable auto-routing.
+        config["batch_threshold"] = max(1, min(50_000, _coerce_int(data["batch_threshold"], 500)))
 
     if "concurrency" in data:
         config["concurrency"] = max(1, min(10, _coerce_int(data["concurrency"], 5)))

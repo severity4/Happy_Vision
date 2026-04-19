@@ -384,6 +384,9 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- v0.9.0: Async Batch API jobs, if any are in flight or recently finished. -->
+    <BatchJobsPanel />
   </div>
 </template>
 
@@ -392,6 +395,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useWatchStore } from '../stores/watch'
 import { useSettingsStore } from '../stores/settings'
 import { humanizeError } from '../utils/errors.js'
+import BatchJobsPanel from '../components/BatchJobsPanel.vue'
 
 const watchStore = useWatchStore()
 const settingsStore = useSettingsStore()

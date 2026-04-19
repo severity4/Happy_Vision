@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory  # noqa: E402
 
 from api.analysis import analysis_bp
+from api.batch import batch_bp, broadcast_batch_event
 from api.export import export_bp
 from api.results import results_bp
 from api.settings import settings_bp
@@ -68,6 +69,7 @@ app.register_blueprint(export_bp)
 app.register_blueprint(watch_bp)
 app.register_blueprint(update_bp)
 app.register_blueprint(system_bp)
+app.register_blueprint(batch_bp)
 
 
 def _post_start_init() -> None:
@@ -94,6 +96,16 @@ def _post_start_init() -> None:
             # keychain still not authorised, etc). User can retry from Settings.
             import logging
             logging.getLogger(__name__).exception("auto_start_watcher failed")
+    # v0.9.0: Batch monitor background thread. Polls Gemini every 60s for
+    # in-flight batch jobs, materialises results + metadata on completion.
+    # Idempotent — safe if the user hasn't configured a key yet (the monitor
+    # no-ops until one is present).
+    try:
+        from modules.batch_monitor import start_background_monitor
+        start_background_monitor(event_sink=broadcast_batch_event)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("start_background_monitor failed")
 
 
 def _get_version() -> str:

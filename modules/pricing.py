@@ -23,13 +23,30 @@ DEFAULT_PRICING = PRICING["gemini-2.5-flash-lite"]
 # Rough TWD conversion used only for side-label display. Real billing is USD.
 USD_TO_TWD_APPROX = 32.0
 
+# Gemini Batch API is 50% of realtime pricing (confirmed 2026-04-19 via
+# https://ai.google.dev/gemini-api/docs/batch-api). Kept as a named constant
+# so UI cost estimators and batch_monitor stay aligned.
+BATCH_DISCOUNT_MULTIPLIER = 0.5
 
-def calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Return cost in USD for one analyze call. Always non-negative."""
+
+def calc_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    batch: bool = False,
+) -> float:
+    """Return cost in USD for one analyze call. Always non-negative.
+
+    `batch=True` applies the Batch API discount — use when computing
+    projected cost for a batch submission, or when storing the realised
+    cost of a batch-mode result."""
     input_tokens = max(0, int(input_tokens or 0))
     output_tokens = max(0, int(output_tokens or 0))
     p = PRICING.get(model, DEFAULT_PRICING)
-    return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000.0
+    cost = (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000.0
+    if batch:
+        cost *= BATCH_DISCOUNT_MULTIPLIER
+    return cost
 
 
 def format_cost(cost_usd: float) -> str:

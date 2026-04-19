@@ -94,6 +94,45 @@ class ResultStore:
             except sqlite3.OperationalError:
                 pass
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_results_phash ON results(phash)")
+
+        # v0.9.0: Gemini Batch API job tracking. One row per submitted batch
+        # job, one row per (job, request_key) in batch_items so we can map
+        # output lines back to local paths after the app restarts.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                model TEXT NOT NULL,
+                photo_count INTEGER NOT NULL,
+                completed_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                input_file_id TEXT,
+                output_file_id TEXT,
+                payload_bytes INTEGER NOT NULL DEFAULT 0,
+                write_metadata INTEGER NOT NULL DEFAULT 0,
+                image_max_size INTEGER NOT NULL DEFAULT 3072,
+                display_name TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_jobs_updated_at ON batch_jobs(updated_at DESC)")
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_items (
+                job_id TEXT NOT NULL,
+                request_key TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                PRIMARY KEY (job_id, request_key)
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_items_job_id ON batch_items(job_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_items_file_path ON batch_items(file_path)")
         self.conn.commit()
 
     def save_result(
@@ -349,6 +388,131 @@ class ResultStore:
                 }
             results.append(data)
         return results
+
+    # ---------------- Batch jobs (v0.9.0) ----------------
+    def create_batch_job(
+        self,
+        job_id: str,
+        folder: str,
+        model: str,
+        items: list[tuple[str, str]],
+        input_file_id: str,
+        payload_bytes: int,
+        display_name: str = "",
+        write_metadata: bool = False,
+        image_max_size: int = 3072,
+        initial_status: str = "JOB_STATE_PENDING",
+    ) -> None:
+        """Persist a newly-submitted batch job + its (key, file_path) items."""
+        now = datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO batch_jobs
+                   (job_id, status, folder, model, photo_count, completed_count,
+                    failed_count, input_file_id, payload_bytes, write_metadata,
+                    image_max_size, display_name, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job_id, initial_status, folder, model, len(items),
+                    input_file_id, payload_bytes, 1 if write_metadata else 0,
+                    image_max_size, display_name, now, now,
+                ),
+            )
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO batch_items (job_id, request_key, file_path, status) "
+                "VALUES (?, ?, ?, 'pending')",
+                [(job_id, k, p) for k, p in items],
+            )
+            self.conn.commit()
+
+    def update_batch_job_status(
+        self,
+        job_id: str,
+        status: str,
+        output_file_id: str | None = None,
+        error_message: str | None = None,
+        completed_count: int | None = None,
+        failed_count: int | None = None,
+    ) -> None:
+        now = datetime.now().isoformat()
+        ended = status in {
+            "JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED",
+            "JOB_STATE_PARTIALLY_SUCCEEDED",
+        }
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT status, completed_count, failed_count FROM batch_jobs WHERE job_id = ?",
+                (job_id,),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                return
+            new_completed = completed_count if completed_count is not None else existing["completed_count"]
+            new_failed = failed_count if failed_count is not None else existing["failed_count"]
+            cur.execute(
+                """UPDATE batch_jobs SET status = ?, updated_at = ?,
+                          output_file_id = COALESCE(?, output_file_id),
+                          error_message = COALESCE(?, error_message),
+                          completed_count = ?, failed_count = ?,
+                          completed_at = CASE WHEN ? AND completed_at IS NULL THEN ? ELSE completed_at END
+                   WHERE job_id = ?""",
+                (
+                    status, now, output_file_id, error_message,
+                    new_completed, new_failed,
+                    1 if ended else 0, now if ended else None,
+                    job_id,
+                ),
+            )
+            self.conn.commit()
+
+    def get_batch_job(self, job_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM batch_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_batch_jobs(self, active_only: bool = False, limit: int = 100) -> list[dict]:
+        """List batch jobs, newest first. `active_only` excludes ended states."""
+        ended = (
+            "JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED",
+            "JOB_STATE_PARTIALLY_SUCCEEDED",
+        )
+        if active_only:
+            placeholders = ",".join("?" * len(ended))
+            query = (
+                f"SELECT * FROM batch_jobs WHERE status NOT IN ({placeholders}) "
+                "ORDER BY updated_at DESC LIMIT ?"
+            )
+            params = (*ended, limit)
+        else:
+            query = "SELECT * FROM batch_jobs ORDER BY updated_at DESC LIMIT ?"
+            params = (limit,)
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_batch_items(self, job_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT request_key, file_path, status FROM batch_items WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_batch_item(self, job_id: str, request_key: str, status: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE batch_items SET status = ? WHERE job_id = ? AND request_key = ?",
+                (status, job_id, request_key),
+            )
+            self.conn.commit()
+
+    def delete_batch_job(self, job_id: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM batch_items WHERE job_id = ?", (job_id,))
+            self.conn.execute("DELETE FROM batch_jobs WHERE job_id = ?", (job_id,))
+            self.conn.commit()
 
     def close(self):
         self.conn.close()

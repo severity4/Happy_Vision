@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.9.0 — 2026-04-19 · Gemini Batch API（省 50% 的非同步模式）
+
+15 萬張照片批量回補的場景,即時模式要跑 ~17 分鐘、花 $4.5。批次模式 24h 內完成、花 $2.25。這版把批次管道接上。
+
+### 功能
+- **設定頁新增「BATCH MODE」section**:OFF / AUTO / ALWAYS 三檔
+  - OFF = 現在的即時行為(預設)
+  - AUTO = 一批 ≥ `batch_threshold` 張自動切批次(預設 500)
+  - ALWAYS = 永遠走批次
+- **⚠ Tier 1 付費提示**:批次 API 要求 Google AI Studio 綁定信用卡的付費帳號,免費額度不支援。Banner 裡直接有「去 AI Studio 設定付費 →」按鈕,走 `open_external` 打開 `https://aistudio.google.com/app/plan_information`
+- **Monitor 頁新增 Batch Jobs 面板**:顯示進行中 + 剛完成的 jobs,每個 job 顯示進度條、狀態燈(PENDING/RUNNING/SUCCEEDED/FAILED/EXPIRED)、24h SLO 預計完成時間、取消按鈕
+- **背景 monitor 線程**:每 60 秒 poll 一次 Gemini、完成後自動 download output JSONL、寫 IPTC metadata、存進 SQLite — 使用者可以關 App 明天再看,重開會接著跑
+
+### 實作
+- `modules/gemini_batch.py`:submit / poll / fetch / cancel 四個核心操作,JSONL 建構時 base64 內聯 3072px 以下的圖片
+  - 自動 chunk(3000 張/job,<1.5GB payload,低於 Gemini 2GB 限制)
+  - `mime_type` 走 `"jsonl"` → `"text/plain"` 的 fallback(SDK issue #1590 workaround)
+  - `TierRequiredError` 友善包裝 PERMISSION_DENIED,前端收到 402 後顯示付費 CTA
+- `modules/batch_monitor.py`:daemon thread,指數回退的 polling,SSE event_sink 注入
+- `modules/result_store.py`:新增 `batch_jobs` + `batch_items` 兩張表,additive migration
+- `modules/pipeline.py`:`submit_batch_run()` + `route_mode()` 決策函數
+- `modules/pricing.py`:`calc_cost_usd(..., batch=True)` 應用 50% 折扣;`BATCH_DISCOUNT_MULTIPLIER` 具名常數
+- `api/batch.py`:新 blueprint,`/submit`, `/jobs`, `/jobs/<id>/cancel`, `/jobs/<id>` DELETE, `/stream` SSE
+- `api/analysis.py`:`/start` 根據 `batch_mode` config 自動 route 到批次提交
+- `api/settings.py`:`batch_mode` enum 驗證 + `batch_threshold` clamp 1-50000
+
+### 測試
+- `tests/test_gemini_batch.py` 16 個測試(snake_case 驗證、KeyError fallback、tier error、success + error line parsing)
+- `tests/test_result_store_batch.py` 6 個(persistence、active filter、delete cascade)
+- `tests/test_batch_routing.py` 14 個(decision matrix + settings API validation)
+- 共 320 tests passing(v0.8.1 是 284)
+
+### 已知限制
+- 目前沒實作 Vertex AI path(只支援 Gemini Developer API);Vertex 的 2GB 上限更寬鬆,之後可加
+- 批次送出後 app 中途被殺進程,再開時會從 DB 繼續 poll — 但已經 download 的 output 不會重算,算是功能而非 bug
+- 單一 job 可能 `JOB_STATE_PARTIALLY_SUCCEEDED`(少數照片 parse 失敗),目前 UI 當作 SUCCEEDED 處理,差別在 `failed_count` 欄位
+
 ## v0.8.1 — 2026-04-19 · Onboarding Wizard（first-run 三步引導）
 
 UX Researcher 早先指出的 P0 是「首次開 app 落在空白監控頁，設定頁 8 個 section 不知從何下手」。之前一直沒補，這版補上。

@@ -41,6 +41,13 @@ DEFAULT_CONFIG = {
     # 0 = disabled (tag everything, prior behaviour).
     # 3 = typical "keeper" threshold; filters out 1-2 star rejects + unrated.
     "min_rating": 0,
+    # Gemini Batch API mode (v0.9.0+). Batch = 50% cost, 24h SLO, async.
+    # REQUIRES a Tier-1 paid Google AI Studio account (credit card bound).
+    # off    = always realtime
+    # auto   = batch when photo count >= batch_threshold, else realtime
+    # always = batch every run
+    "batch_mode": "off",
+    "batch_threshold": 500,
 }
 
 
