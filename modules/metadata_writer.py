@@ -130,6 +130,25 @@ def has_happy_vision_tag_batch(batch: "ExiftoolBatch", photo_path: str) -> bool:
     return "HappyVisionProcessed" in str(user_comment)
 
 
+def read_rating_batch(batch: "ExiftoolBatch", photo_path: str) -> int:
+    """Return Lightroom-compatible XMP:Rating (0-5), or 0 if absent/unreadable.
+
+    Lightroom writes rating to XMP-xmp:Rating as an integer 0-5. We also
+    check EXIF (camera-written ratings) as a fallback. 0 means "no rating"
+    which in Lightroom UI is displayed as zero stars."""
+    data = batch.read_json(photo_path, ["-XMP:Rating", "-EXIF:Rating", "-Rating"])
+    if not isinstance(data, dict):
+        return 0
+    raw = data.get("Rating")
+    if raw is None or raw == "":
+        return 0
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(5, n))
+
+
 class ExiftoolBatch:
     """Persistent exiftool process using -stay_open mode.
 

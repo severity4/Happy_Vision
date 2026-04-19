@@ -70,6 +70,10 @@ def update_settings():
         # 0 = disabled; above ~12 is basically "everything is a dup"
         config["phash_threshold"] = max(0, min(16, _coerce_int(data["phash_threshold"], 5)))
 
+    if "min_rating" in data:
+        # 0 = disabled (tag everything); 1-5 = Lightroom star threshold
+        config["min_rating"] = max(0, min(5, _coerce_int(data["min_rating"], 0)))
+
     if "concurrency" in data:
         config["concurrency"] = max(1, min(10, _coerce_int(data["concurrency"], 5)))
 

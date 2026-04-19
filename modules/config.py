@@ -35,6 +35,12 @@ DEFAULT_CONFIG = {
     # 0 = disables dedup entirely. 5 catches typical burst duplicates without
     # merging different moments. See modules/phash.py for tuning guidance.
     "phash_threshold": 5,
+    # Lightroom rating pre-filter (v0.8.0+). If > 0, photos with XMP:Rating
+    # strictly less than this value are skipped — don't get analysed, don't
+    # hit the API. Assumes the photographer has already culled in Lightroom.
+    # 0 = disabled (tag everything, prior behaviour).
+    # 3 = typical "keeper" threshold; filters out 1-2 star rejects + unrated.
+    "min_rating": 0,
 }
 
 

@@ -18,6 +18,7 @@ from modules.metadata_writer import (
     build_exiftool_args,
     has_happy_vision_tag,
     has_happy_vision_tag_batch,
+    read_rating_batch,
 )
 from modules.result_store import ResultStore
 
@@ -293,6 +294,12 @@ class FolderWatcher:
             all_photos = _scan_recursive(folder)
             enqueued = 0
             skipped = 0
+            rating_skipped = 0
+
+            # Read rating filter once per scan rather than per photo — config
+            # reads have Keychain side effects and are relatively expensive.
+            config = load_config()
+            min_rating = int(config.get("min_rating", 0))
 
             for photo_path in all_photos:
                 if self._stop_event.is_set():
@@ -334,6 +341,23 @@ class FolderWatcher:
                     except Exception:
                         log.warning("Cannot read IPTC for %s, will try to process", photo_path)
 
+                # Lightroom rating filter (v0.8.0+): if user set a minimum
+                # rating threshold, skip photos rated below it. Assumes the
+                # photographer already culled in Lightroom before tagging.
+                # min_rating=0 disables the filter (default / prior behaviour).
+                if min_rating > 0 and self._batch is not None:
+                    try:
+                        rating = read_rating_batch(self._batch, photo_path)
+                        if rating < min_rating:
+                            # Don't save to DB — user might re-rate in
+                            # Lightroom and re-scan later, we want to pick
+                            # those up. Just skip this pass.
+                            rating_skipped += 1
+                            skipped += 1
+                            continue
+                    except Exception:
+                        log.warning("Cannot read Rating for %s, will process", photo_path)
+
                 # Check file readiness
                 if not file_size_stable(photo_path):
                     skipped += 1
@@ -344,6 +368,9 @@ class FolderWatcher:
                 self._queue.put(photo_path)
                 enqueued += 1
 
+            if rating_skipped > 0:
+                log.info("Rating filter skipped %d photo(s) below %d stars",
+                         rating_skipped, min_rating)
             return enqueued, skipped
 
     def _worker_loop(self) -> None:

@@ -267,6 +267,32 @@
         <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ phashDescription }}</p>
       </section>
 
+      <!-- Lightroom rating filter -->
+      <section class="border border-border-default bg-surface-1 rounded-md p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="minRating === 0 ? '' : 'led-accent'"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">MIN RATING · Lightroom 星等預篩</span>
+          </div>
+          <span class="font-mono text-lg font-semibold" :class="minRating === 0 ? 'text-text-tertiary' : 'text-accent-violet'">
+            {{ minRating === 0 ? 'OFF' : '★'.repeat(minRating) }}
+          </span>
+        </div>
+        <input
+          v-model.number="minRating"
+          type="range"
+          min="0"
+          max="5"
+          step="1"
+          @change="save({ min_rating: minRating }, '星等預篩')"
+          class="w-full h-1 bg-surface-3 rounded appearance-none cursor-pointer accent-accent-violet [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-violet [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(155,123,255,0.6)]"
+        />
+        <div class="flex justify-between mt-1 font-mono text-[10px] text-text-tertiary">
+          <span>0 OFF</span><span>1★</span><span>2★</span><span>3★</span><span>4★</span><span>5★</span>
+        </div>
+        <p class="kicker mt-3" style="color: var(--color-text-secondary)">{{ minRatingDescription }}</p>
+      </section>
+
       <!-- Skip existing -->
       <section class="border border-border-default bg-surface-1 rounded-md p-5" id="skip-existing-section">
         <label for="skip" class="flex items-center justify-between cursor-pointer">
@@ -361,6 +387,7 @@ const skipExisting = ref(false)
 const rpm = ref(60)
 const imageMaxSize = ref(3072)
 const phashThreshold = ref(5)
+const minRating = ref(0)
 const showAdvanced = ref(false)
 const showDeveloper = ref(false)
 
@@ -426,6 +453,16 @@ const phashDescription = computed(() => {
   return `極寬鬆（${n} bits）· 會把不同人物或場景誤判為重複，不建議開這麼高`
 })
 
+const minRatingDescription = computed(() => {
+  const n = minRating.value
+  if (n === 0) return '關閉預篩：資料夾內所有 JPG 都會被分析'
+  if (n === 1) return '1 星以上才 tag · 只跳過未評分的廢片'
+  if (n === 2) return '2 星以上才 tag · 跳過 1 星 rejects + 未評分'
+  if (n === 3) return '3 星以上才 tag · 只處理「keeper」等級，典型選片率下省 60-70% API 成本'
+  if (n === 4) return '4 星以上才 tag · 只處理精選，通常省 80%+ API 成本'
+  return '5 星以上才 tag · 只處理封面級精選，最省但可能漏掉要交件的照片'
+})
+
 onMounted(async () => {
   await store.fetchSettings()
   model.value = store.settings.model || 'lite'
@@ -439,6 +476,7 @@ onMounted(async () => {
     ? store.settings.image_max_size
     : 3072
   phashThreshold.value = Math.min(16, Math.max(0, store.settings.phash_threshold ?? 5))
+  minRating.value = Math.min(5, Math.max(0, store.settings.min_rating ?? 0))
 })
 
 async function saveApiKey() {

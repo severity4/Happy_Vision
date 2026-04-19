@@ -27,13 +27,27 @@ def test_open_external_https_ok(client):
     assert m.call_args.args[0] == "https://aistudio.google.com/apikey"
 
 
-def test_open_external_http_ok(client):
-    with patch("api.system.webbrowser.open"):
+def test_open_external_http_ok_when_host_allowed(client):
+    """http:// is allowed (some links use non-TLS) but only for allowlisted hosts."""
+    with patch("api.system.webbrowser.open") as m:
         res = client.post(
             "/api/system/open_external",
-            json={"url": "http://example.com"},
+            json={"url": "http://github.com/happy-vision/releases"},
         )
     assert res.status_code == 200
+    m.assert_called_once()
+
+
+def test_open_external_rejects_unknown_host(client):
+    """Security M4: even with valid http/https scheme, non-allowlist hosts
+    must 400 to prevent the endpoint being used as a phishing launcher."""
+    with patch("api.system.webbrowser.open") as m:
+        res = client.post(
+            "/api/system/open_external",
+            json={"url": "https://evil.example.com/phish"},
+        )
+    assert res.status_code == 400
+    m.assert_not_called()
 
 
 def test_open_external_rejects_file_scheme(client):

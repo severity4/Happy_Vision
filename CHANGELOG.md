@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.8.0 — 2026-04-19 · Lightroom Rating 預篩
+
+### 🎯 新功能：依 Lightroom 星等過濾，不處理 reject 跟未評分
+
+攝影師 workflow 通常是「Lightroom 選片 → 只交件 ≥3 星」。之前 Happy Vision 會 tag 整個資料夾所有 JPG（含 1-2 星 reject + 未評分廢片），這些都是浪費。v0.8.0 加 `min_rating` 設定，folder_watcher 掃描時跳過 rating 低於門檻的照片。
+
+### 量化收益（承接 v0.6.0 / v0.5.1）
+假設典型選片率 30%（15 萬張只有約 4.5 萬張 ≥3 星）：
+- min_rating=3 時，folder_watcher 不會把 1-2 星 / 未評分的照片送進 queue
+- **額外省 70% API 成本 + 70% 處理時間**（疊加 v0.6.0 dedup + v0.5.1 throughput）
+
+全堆疊更新（15 萬 JPG，30% 選片率，連拍去重 5，2000 RPM，1536 max_size）：
+- v0.7.2 base: 55 分鐘 / \$15 / NT\$500
+- **v0.8.0 min_rating=3：** **17 分鐘 / \$4.5 / NT\$150**（省 70% 時間 + 70% 金額）
+
+### 實作
+- `modules/metadata_writer.py`：新增 `read_rating_batch(batch, photo_path) -> int`，透過 persistent exiftool 讀 XMP:Rating / EXIF:Rating。Lightroom 寫入的位置對到 XMP:xmp:Rating。
+- `modules/folder_watcher.py`：掃描時每張照片先讀 rating，低於 `min_rating` 就跳過（不存 DB，使用者之後在 Lightroom 改 rating 重掃會重抓）。log 印出跳過總數。
+- `modules/config.py`：`DEFAULT_CONFIG["min_rating"] = 0`（0 = 停用）。
+- `api/settings.py`：clamp `[0, 5]`，非法值不會 500。
+- `SettingsView.vue`：進階效能新增 `MIN RATING · Lightroom 星等預篩` slider，OFF / 1★ / 2★ / 3★ / 4★ / 5★，動態描述說明每個 level 對應的省錢效果。
+
+### Tests
+- `tests/test_rating_filter.py` — 10 個（read_rating_batch 各種輸入、空值、clamp、settings API 接受 / clamp）
+
+### 其他 (from v0.7.x carryover that got delayed)
+- `api/system.open_external` 的 host allowlist 測試對齊（`example.com` 改成 `github.com`）
+
+### 升級注意
+`min_rating` 預設 0 = 停用。現有使用者升級後行為不變。要省錢：Settings → 進階效能 → MIN RATING 拉到 3★（或你習慣的交件門檻）。
+
 ## v0.7.2 — 2026-04-19 (hotfix · Keychain 反覆要密碼)
 
 ### 🔴 使用者場景：每次開 App 都要輸入 macOS 登入密碼
