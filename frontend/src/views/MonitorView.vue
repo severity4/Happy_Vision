@@ -69,10 +69,10 @@
         >
           + 加入資料夾
         </button>
-        <a :href="exportUrl('pdf')" class="bg-accent-violet/10 hover:bg-accent-violet/20 border border-accent-violet/30 text-accent-violet font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">PDF 報告</a>
-        <a :href="exportUrl('csv')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">CSV</a>
-        <a :href="exportUrl('json')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">JSON</a>
-        <a :href="exportUrl('diagnostics')" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">診斷</a>
+        <button @click="downloadExport('pdf')" :disabled="exportBusy" class="bg-accent-violet/10 hover:bg-accent-violet/20 border border-accent-violet/30 text-accent-violet disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">PDF 報告</button>
+        <button @click="downloadExport('csv')" :disabled="exportBusy" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">CSV</button>
+        <button @click="downloadExport('json')" :disabled="exportBusy" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">JSON</button>
+        <button @click="downloadExport('diagnostics')" :disabled="exportBusy" class="bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[11px] tracking-wider px-3 py-1.5 rounded transition-colors">診斷</button>
       </div>
     </section>
 
@@ -86,6 +86,11 @@
       <p class="font-mono text-xs text-accent-violet">
         已加入 <strong>{{ enqueueResult.enqueued }}</strong> 張照片到處理佇列 · 跳過 {{ enqueueResult.skipped }} 張已處理
       </p>
+    </div>
+
+    <!-- Export success toast -->
+    <div v-if="exportMsg" class="border border-accent-violet/30 bg-accent-violet/[0.05] rounded-md px-4 py-2">
+      <p class="font-mono text-xs text-accent-violet">{{ exportMsg }}</p>
     </div>
 
     <!-- Inline folder browser -->
@@ -445,12 +450,61 @@ async function onRetried(payload) {
 const timeTick = ref(0)
 let tickTimer = null
 
-// Export links are plain <a> navigations, which bypass the fetch()
-// interceptor in main.js that normally injects X-HV-Token. Append the
-// token as a query param (same mechanism auth.py uses for SSE).
-const exportUrl = (kind) => {
-  const token = window.__HV_TOKEN__ || ''
-  return `/api/export/${kind}?token=${encodeURIComponent(token)}`
+// Export via fetch → blob → programmatic download. Using <a href> in
+// pywebview navigated the window to the download URL, which (a) couldn't
+// attach X-HV-Token (403), (b) stranded the user with no back button on
+// an error or raw response, forcing an app restart. fetch() goes through
+// main.js's auth interceptor and the blob path triggers a native save
+// dialog without leaving the page.
+const exportBusy = ref(false)
+const exportMsg = ref('')
+
+const EXPORT_META = {
+  pdf: { filename: 'happy_vision_report.pdf', label: 'PDF 報告' },
+  csv: { filename: 'happy_vision_report.csv', label: 'CSV' },
+  json: { filename: 'happy_vision_report.json', label: 'JSON' },
+  diagnostics: { filename: 'happy_vision_diagnostics.zip', label: '診斷包' },
+}
+
+async function downloadExport(kind) {
+  if (exportBusy.value) return
+  exportBusy.value = true
+  errorMsg.value = ''
+  exportMsg.value = ''
+  try {
+    const res = await fetch(`/api/export/${kind}`)
+    if (res.status === 404) {
+      // Backend signals "no data to export" for pdf/csv/json; diagnostics
+      // always returns a zip so it won't hit this branch.
+      errorMsg.value = '尚無分析結果可匯出（先處理一些照片再試）'
+      return
+    }
+    if (!res.ok) {
+      let detail = `${res.status}`
+      try {
+        const body = await res.json()
+        if (body?.error) detail = body.error
+      } catch { /* non-JSON body, keep status code */ }
+      errorMsg.value = `匯出失敗：${detail}`
+      return
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = EXPORT_META[kind]?.filename || `happy_vision_${kind}`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    // Give the browser a beat to start the download before revoking.
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    exportMsg.value = `已匯出 ${EXPORT_META[kind]?.label || kind}`
+    setTimeout(() => { exportMsg.value = '' }, 4000)
+  } catch (e) {
+    errorMsg.value = `匯出失敗：${e?.message || e}`
+  } finally {
+    exportBusy.value = false
+  }
 }
 
 const hasApiKey = computed(() => !!settingsStore.settings.gemini_api_key_set)
