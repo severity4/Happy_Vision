@@ -450,20 +450,20 @@ async function onRetried(payload) {
 const timeTick = ref(0)
 let tickTimer = null
 
-// Export via fetch → blob → programmatic download. Using <a href> in
-// pywebview navigated the window to the download URL, which (a) couldn't
-// attach X-HV-Token (403), (b) stranded the user with no back button on
-// an error or raw response, forcing an app restart. fetch() goes through
-// main.js's auth interceptor and the blob path triggers a native save
-// dialog without leaving the page.
+// Export via backend save-to-Downloads. Earlier tried fetch → blob →
+// programmatic <a download> click, but pywebview's WKWebView ignores
+// the download attribute (or silently fails) — clicking just did nothing
+// visible. The reliable fix: backend writes the file to ~/Downloads and
+// returns the path, frontend shows a toast. No WKWebView download
+// handler needed.
 const exportBusy = ref(false)
 const exportMsg = ref('')
 
-const EXPORT_META = {
-  pdf: { filename: 'happy_vision_report.pdf', label: 'PDF 報告' },
-  csv: { filename: 'happy_vision_report.csv', label: 'CSV' },
-  json: { filename: 'happy_vision_report.json', label: 'JSON' },
-  diagnostics: { filename: 'happy_vision_diagnostics.zip', label: '診斷包' },
+const EXPORT_LABELS = {
+  pdf: 'PDF 報告',
+  csv: 'CSV',
+  json: 'JSON',
+  diagnostics: '診斷包',
 }
 
 async function downloadExport(kind) {
@@ -472,34 +472,21 @@ async function downloadExport(kind) {
   errorMsg.value = ''
   exportMsg.value = ''
   try {
-    const res = await fetch(`/api/export/${kind}`)
+    const res = await fetch(`/api/export/save/${kind}`, { method: 'POST' })
     if (res.status === 404) {
-      // Backend signals "no data to export" for pdf/csv/json; diagnostics
-      // always returns a zip so it won't hit this branch.
       errorMsg.value = '尚無分析結果可匯出（先處理一些照片再試）'
       return
     }
+    const body = await res.json().catch(() => ({}))
     if (!res.ok) {
-      let detail = `${res.status}`
-      try {
-        const body = await res.json()
-        if (body?.error) detail = body.error
-      } catch { /* non-JSON body, keep status code */ }
-      errorMsg.value = `匯出失敗：${detail}`
+      errorMsg.value = `匯出失敗：${body?.error || res.status}`
       return
     }
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = EXPORT_META[kind]?.filename || `happy_vision_${kind}`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    // Give the browser a beat to start the download before revoking.
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    exportMsg.value = `已匯出 ${EXPORT_META[kind]?.label || kind}`
-    setTimeout(() => { exportMsg.value = '' }, 4000)
+    // body.saved = absolute path like /Users/…/Downloads/happy_vision_report_20260420-094500.csv
+    const label = EXPORT_LABELS[kind] || kind
+    const shortPath = (body.saved || '').replace(/^.*\/Downloads\//, '~/Downloads/')
+    exportMsg.value = `已匯出 ${label} → ${shortPath}`
+    setTimeout(() => { exportMsg.value = '' }, 6000)
   } catch (e) {
     errorMsg.value = `匯出失敗：${e?.message || e}`
   } finally {

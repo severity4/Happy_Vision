@@ -1,84 +1,104 @@
-# Copilot instructions for Happy_Vision
+# Copilot 指南 — Happy_Vision
 
-Purpose: provide repository-specific commands, a concise architecture overview, and key conventions for Copilot sessions working in this repo.
+目的：為進入此倉庫的 Copilot / 自動化 agent 提供專案特定的指令、架構要點與慣例，便於快速取得上下文並做出正確建議或變更。
 
-1) Build, test, and lint commands
+1) 常用建置 / 測試 / Lint 指令
 
-- Install (Python deps + frontend):
-  - ./setup.sh  # creates .venv and installs Python deps
-  - OR make install
+- 安裝（Python 與 frontend）：
+  - ./setup.sh    # 建立 .venv，安裝 Python 套件
+  - 或：make install
 
-- Dev mode (runs backend + frontend):
-  - make dev  # starts Flask (8081) and Vite (5176)
-  - or: python3 web_ui.py & cd frontend && npm run dev
+- 開發模式（同時啟動後端與前端）：
+  - make dev     # 會啟動 Flask (8081) 與 Vite (5176)
+  - 或手動：python3 web_ui.py & cd frontend && npm run dev
 
-- Run frontend build:
-  - make build  # runs `cd frontend && npm run build`
+- 前端建置：
+  - make build   # cd frontend && npm run build
 
-- Lint (Python):
-  - make lint  # ruff check modules api tests web_ui.py cli.py
-  - run ruff on a single file: ruff check modules/gemini_vision.py
+- Lint（Python，使用 ruff）：
+  - make lint    # ruff check modules api tests web_ui.py cli.py
+  - 檢查單一檔案：ruff check modules/gemini_vision.py
 
-- Tests (pytest):
-  - make test  # runs pytest -q (full suite)
-  - run a single test file: pytest -q tests/test_metadata_writer.py
-  - run a single test function: pytest tests/test_metadata_writer.py::test_write_metadata -q
-  - run tests matching -k: pytest -k "metadata"
+- 測試（pytest）：
+  - make test    # 執行整個測試套件（pytest -q）
+  - 執行單一測試檔：pytest -q tests/test_metadata_writer.py
+  - 執行單一測試函式：pytest tests/test_metadata_writer.py::test_write_metadata -q
+  - 依關鍵字跑測試：pytest -k "metadata"
 
-- Packaging / app:
-  - make app  # build macOS .app via build_app.py
+- 打包 / App：
+  - make app     # 透過 build_app.py 建置 macOS .app
 
-- Helpful Make targets: make verify (lint + tests), make help
+- 常用 make target：make verify（lint + tests）、make help
 
-2) High-level architecture (big picture)
+2) 高階架構（重點流程）
 
-- Purpose: macOS desktop tool (pywebview) + Flask backend + Vue 3 frontend. Core flow:
-  1. CLI / UI triggers pipeline (cli.py or web_ui.py)
-  2. pipeline orchestrates capture -> gemini_vision (Google GenAI) -> metadata_writer (exiftool) -> result_store (SQLite)
-  3. Background daemon polls Gemini batch jobs and updates job state (modules/batch_monitor, watch)
-  4. Frontend (frontend/) uses Vite; web_ui.py serves API blueprints under api/ for analysis, results, settings, export, etc.
+- 產品定位：macOS 原生桌面工具（pywebview）＋Flask 後端＋Vue 3 前端。
+- 核心資料流程：
+  1. 由 CLI 或 Web UI（cli.py / web_ui.py）觸發 pipeline
+  2. pipeline 呼叫 modules/gemini_vision.py / gemini_batch.py（Google Gemini）分析影像
+  3. 結果由 modules/metadata_writer.py 寫入 IPTC/XMP（exiftool），並存入 modules/result_store.py（SQLite）
+  4. 背景 daemon（batch_monitor / watch）負責輪詢 Gemini 批次作業，更新狀態與重試策略
+  5. 前端（frontend/）透過 API blueprints（api/）呈現監控、失敗重試、報表等功能
 
-- Data stores & external deps:
-  - SQLite DB: ~/.happy-vision/results.db (result_store.py)
-  - exiftool required for writing IPTC/XMP
-  - Google Gemini via google-genai package (gemini_vision.py / gemini_batch.py)
+- 外部依賴與儲存：
+  - SQLite DB（預設在 ~/.happy-vision/results.db）
+  - exiftool（二進位）必須在系統上安裝
+  - Google Gemini（google-genai 套件）作為視覺 AI 引擎
 
-- Packaging: build_app.py / make app produce dist/HappyVision.app (macOS only)
+- 打包：make app / build_app.py → dist/HappyVision.app（目前僅 macOS）
 
-3) Key conventions & repo-specific patterns
+3) 專案慣例與注意事項
 
-- Tests: pytest used for unit and integration tests. Keep tests under tests/*. Use -q for concise output. Many tests assert behavior of pipeline components (phash, result_store, metadata_writer).
+- 測試：pytest 管理單元與整合測試，tests/ 下有大量案例（含 phash、result_store、metadata_writer 等）。
+- Lint：使用 ruff；Makefile 是日常入口。
+- 虛擬環境：setup.sh 會建立 .venv；開發者/CI 假設使用 Python 3.10+
+- 前端：位於 frontend/，使用 Vite；dev server 為 :5176，後端 dev 為 :8081
+- 外部二進位：exiftool 需安裝（setup.sh 在 macOS 上會透過 brew 安裝）
+- 非同步管線：背景 daemon 會標示 LIVE / RETRY / STUCK，閱讀 modules/pipeline.py、modules/gemini_batch.py、modules/batch_monitor.py、modules/result_store.py 能快速理解狀態轉換
+- 秘密與設定：secret_store.py 與 config.py 管理本地設定；不要在程式碼內硬編 API keys。可參考 CLAUDE.md 的維運備註
 
-- Linting: ruff is used; Makefile centralizes targets. Use `make help` to discover supported commands.
+4) Copilot / 自動化 agent 首選檢查位置
 
-- Virtualenv: setup.sh creates .venv and instructs to source .venv/bin/activate. CI/maintainers assume Python 3.10+.
+- web_ui.py（桌面 app / dev server 進入點）
+- cli.py（CLI 流程）
+- modules/gemini_vision.py, modules/gemini_batch.py（外部 API）
+- modules/metadata_writer.py, modules/result_store.py（寫入與儲存）
+- modules/pipeline.py, modules/batch_monitor.py（作業流程與重試邏輯）
+- frontend/ 與 frontend/package.json（若修改前端需檢查）
+- Makefile、setup.sh（常用命令）
 
-- Frontend: standard npm/Vite app in frontend/. Frontend dev server runs on :5176 while Flask runs on :8081 in dev mode.
+5) 已新增的 CI / Canary（重要）
 
-- External binary deps: exiftool must be installed on machine (setup.sh checks/installs via brew on macOS).
+- CI (ruff + pytest)：.github/workflows/ci.yml
+  - 觸發：pull_request、push 到 main
+  - 內容：setup python、安裝 requirements、使用 pip cache、執行 ruff、執行 pytest，並上傳 report
 
-- Long-running background work: background daemon(s) poll Gemini and mark jobs LIVE/RETRY/STUCK. Expect asynchronous state transitions (modules/batch_monitor, system.py). Copilot should prefer inspecting modules/pipeline.py, gemini_batch.py, and result_store.py when reasoning about job flow.
+- Playwright Canary：.github/workflows/playwright-canary.yml
+  - 觸發：push、pull_request、每日排程（03:00 UTC）
+  - 內容：安裝 Node + Playwright 瀏覽器、build 前端、啟動 Flask 後端並等待就緒、執行 E2E 測試、上傳 HTML 報告
 
-- Secrets/config: secret_store.py and config.py hold runtime config; do not hardcode API keys in code. CLAUDE.md contains maintainer notes and operational commands — reference it for release and onboarding steps.
+6) 與其他 AI assistant / agents 的整合
 
-4) Files & commands Copilot should check first
+- AGENTS.md（repo root）已建立，請 agent 開發者將其視為 agent 註冊表：描述名稱、負責人、觸發條件、需要的 GH Secrets/權限與聯絡方式
+- 自動 agent 在運作時，應依 AGENTS.md 與 workflows 路徑尋找觸發點（例如 .github/workflows/playwright-canary.yml）
+- 為避免外部 API 花費或測試漂移，涉及 Gemini/Google 的測試請盡量使用 mock/fixture 或錄製的測試資料（見 AGENTS.md 下方建議）
 
-- web_ui.py (entry for desktop app / dev server)
-- cli.py (CLI flows)
-- modules/gemini_vision.py, modules/gemini_batch.py (external API interactions)
-- modules/metadata_writer.py, modules/result_store.py (I/O and persistence)
-- frontend/ (Vue app) and frontend/package.json
-- Makefile and setup.sh for standard commands
+7) 快速排錯建議（給 Copilot 或自動 agent）
 
-5) Other AI assistant configs
-
-- CLAUDE.md exists and contains maintainer guidance and a short command list; incorporate key commands from it when responding. No other AI assistant config files (.cursorrules, AGENTS.md, etc.) were found at time of writing.
-
-6) Quick troubleshooting hints for Copilot responses
-
-- When suggesting a command to run locally, reference Makefile targets (e.g., `make dev`, `make test`) or the explicit python/npm commands found in those targets.
-- When recommending edits touching metadata or exiftool usage, confirm exiftool is installed and the environment uses the repo's .venv.
+- 要建議本地命令，引用 Makefile 目標（make dev / make test / make lint）或直接列出命令
+- 若變更牽涉 exiftool，先檢查系統是否有安裝（setup.sh 有檢查步驟）
+- 若建議變更會觸發 CI，請同時更新 .github/workflows 及 AGENTS.md（以便其他 agent 知道觸發條件）
 
 ---
 
-Created from README.md, CLAUDE.md, and project files. Keep this file concise and update when major workflows change (e.g., non-macOS packaging).
+備註：此檔案由 README.md、CLAUDE.md、Makefile 與專案程式碼匯總而成；如有流程或包裝方式改變（例如擴展至 Windows），請同步更新本檔與 AGENTS.md。
+
+已記錄的工作流程：
+- .github/workflows/ci.yml（PR 與 push 的 ruff + pytest）
+- .github/workflows/playwright-canary.yml（每日 + push 的 Playwright canary）
+
+若需要，我可以：
+- 把本檔加入 README 的 quick-start badge 與 CI 狀態
+- 把 CLAUDE.md 的維運重點合併進本檔（需你同意）
+
+請問要我把上述兩項（加入 README badge / 合併 CLAUDE.md 要點）一起做嗎？

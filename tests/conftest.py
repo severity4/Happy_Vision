@@ -74,3 +74,29 @@ def _authed_test_client(monkeypatch):
 
     monkeypatch.setattr(FlaskClient, "open", open_with_auth)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _prevent_real_gemini(monkeypatch):
+    """Prevent tests from accidentally instantiating the real genai.Client.
+
+    By default this fixture monkeypatches the genai.Client constructor in
+    modules.gemini_vision and modules.gemini_batch to raise a clear error
+    instructing test authors to patch or provide a fake client. Tests that
+    intentionally mock genai.Client can still monkeypatch it per-test.
+    """
+    class _FailingClient:
+        def __init__(self, *a, **kw):
+            raise RuntimeError(
+                "Attempted to instantiate real genai.Client during tests. "
+                "Tests must mock modules.gemini_vision.genai.Client or set up a "
+                "fake client fixture. See AGENTS.md and tests/ for examples."
+            )
+
+    import modules.gemini_vision as _gv
+    import modules.gemini_batch as _gb
+
+    # Replace the genai module object with a tiny shim exposing Client only.
+    monkeypatch.setattr(_gv, "genai", type("_shim", (), {"Client": _FailingClient}))
+    monkeypatch.setattr(_gb, "genai", type("_shim", (), {"Client": _FailingClient}))
+    yield
