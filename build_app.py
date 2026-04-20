@@ -172,6 +172,22 @@ def build_app():
     print(f"\nRunning: {' '.join(cmd)}\n")
     subprocess.run(cmd, check=True, cwd=PROJECT_DIR)
 
+    # Stamp version into the .app Info.plist so macOS Finder's
+    # "Version" field shows the real VERSION instead of PyInstaller's
+    # default 0.0.0. CLI PyInstaller has no --osx-version flag; the spec
+    # file's BUNDLE() takes a `version=` but we build via CLI for now.
+    # Post-process with plutil (bundled with macOS) — idempotent.
+    version = (PROJECT_DIR / "VERSION").read_text().strip()
+    info_plist = DIST_DIR / f"{APP_NAME}.app" / "Contents" / "Info.plist"
+    if info_plist.exists():
+        for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+            subprocess.run(
+                ["/usr/bin/plutil", "-replace", key, "-string", version,
+                 str(info_plist)],
+                check=True,
+            )
+        print(f"Stamped Info.plist version = {version}")
+
     # Create a launcher script that opens the browser
     app_dir = DIST_DIR / APP_NAME
     if not app_dir.exists():
