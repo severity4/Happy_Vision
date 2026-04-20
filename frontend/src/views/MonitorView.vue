@@ -371,22 +371,32 @@
               </div>
             </template>
 
-            <!-- Failed, no result data -->
+            <!-- No detail data: distinguish three cases so we never
+                 mislabel a completed-but-file-gone row as "處理失敗". -->
             <template v-else>
               <div class="p-5">
                 <div class="flex items-start justify-between mb-4">
                   <div>
                     <span class="kicker">結果詳情</span>
-                    <h3 class="text-lg font-semibold text-text-primary mt-1">處理失敗</h3>
+                    <h3 class="text-lg font-semibold text-text-primary mt-1">
+                      <template v-if="selected?.status === 'failed'">處理失敗</template>
+                      <template v-else>找不到詳情</template>
+                    </h3>
                   </div>
                   <button
                     @click="closeDetail"
                     class="shrink-0 w-8 h-8 rounded bg-surface-2 hover:bg-surface-3 flex items-center justify-center text-text-secondary hover:text-text-primary font-mono text-xs"
                   >✕</button>
                 </div>
-                <div v-if="selected?.error_message" class="border border-error/30 bg-error/[0.05] rounded p-3 mb-4">
+                <!-- Failed row: show the actual error. -->
+                <div v-if="selected?.status === 'failed' && selected?.error_message" class="border border-error/30 bg-error/[0.05] rounded p-3 mb-4">
                   <p class="text-xs text-error">{{ humanizeError(selected.error_message) }}</p>
                   <p v-if="selected.error_message !== humanizeError(selected.error_message)" class="font-mono text-[10px] text-text-tertiary mt-2 break-all">技術細節：{{ selected.error_message }}</p>
+                </div>
+                <!-- Completed but detail missing: usually means the source file was
+                     moved / deleted after analysis. Don't lie and call it "處理失敗". -->
+                <div v-else-if="selected?.status === 'completed'" class="border border-warning/30 bg-warning/[0.05] rounded p-3 mb-4">
+                  <p class="text-xs text-warning">這張照片的分析結果讀取失敗 — 原始檔可能已被移動、改名或刪除。</p>
                 </div>
                 <div class="pt-3 border-t border-border-default">
                   <p class="kicker mb-1">檔案路徑</p>
@@ -609,7 +619,14 @@ async function openDetail(item) {
   if (item.status !== 'completed') return
   detailLoading.value = true
   try {
-    const res = await fetch(`/api/results/${encodeURIComponent(item.file_path)}`)
+    // POST /api/results/detail — avoids the %2F-in-path breakage that
+    // hit GET /api/results/<path> for any absolute file path. See
+    // api/results.py::get_result_detail for the full postmortem.
+    const res = await fetch('/api/results/detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_path: item.file_path }),
+    })
     if (res.ok) detailData.value = await res.json()
   } catch {}
   detailLoading.value = false

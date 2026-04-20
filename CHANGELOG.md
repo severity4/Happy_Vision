@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.13.4 — 2026-04-20 · Test DB pollution hotfix(dogfood 回報)
+
+Bobo 在 dogfood 時點「最近結果」的綠燈項目,打開卻顯示「處理失敗」。排查後發現真實 `~/.happy-vision/results.db` 被 134 筆 pytest tmp_path 路徑污染 —— `test_watch_api.py` 的 watcher daemon thread 洩漏到測試結束後,此時 `HAPPY_VISION_HOME` monkeypatch 已 rollback,thread 內 `ResultStore()` 寫到真實 home。
+
+### 看門狗:`ResultStore` 擋真實 home 寫入
+`modules/result_store.py` 在 `__init__` 偵測 `sys.modules["pytest"]`(整個 session 都存在,比 `PYTEST_CURRENT_TEST` 穩),若 `db_path.parent == ~/.happy-vision` 就 `RuntimeError`。production 永遠不 import pytest,零 runtime 成本。這是結構性保險絲 —— 以後任何新增的背景 thread 洩漏立刻紅燈,不靠個別測試記得 isolate。
+
+### Root cause fix:watcher teardown autouse fixture
+`tests/conftest.py` 加 `_stop_leaked_watcher` autouse,test 結束後 `_watcher.stop()` + 清 `_shared_store`。停掉 thread 本身才是治本;看門狗是防止下次 regression。
+
+### UI 防禦:綠燈 + fetch 失敗不要說「處理失敗」
+`MonitorView.vue` 點開 detail 時,若 `status='completed'` 但 `detailData=null`(fetch 回 404 / 檔案不存在),之前會落到 `v-else` 模板顯示「處理失敗」—— 對 dogfood 使用者是誤導。現在改成「找不到詳情 · 原始檔可能已被移動、改名或刪除」,warning tone 而非 error。
+
+### 附帶修:`POST /api/results/detail` 繞過 `%2F` 路由爛掉
+實測 v0.13.4 UI 時發現所有真實 row 點開都顯示「找不到詳情」—— root cause 是 `GET /api/results/<path:file_path>` 在絕對路徑(前端 `encodeURIComponent('/Users/...')` = `%2FUsers...`)下 Werkzeug 會 unquote 成 `//Users/...`,Flask path converter match 不起來 404。這個 bug 從 v0.13.3 就存在,只是之前 UI 誤顯示成「處理失敗」所以沒人追。現在 `MonitorView.openDetail` 改打 `POST /api/results/detail {file_path}`,不讓 URL 編碼搞破壞。舊 GET 路由保留,內部 caller 不受影響。`tests/hardening/test_result_detail_post.py` 6 個 regression。
+
+### 清理
+一次性 SQL:`DELETE FROM results WHERE file_path LIKE '%pytest%' OR '/var/folders/%' OR '/tmp/%'`。備份在 `~/.happy-vision/results.db.bak-<timestamp>`。
+
 ## v0.12.1 — 2026-04-19 · Retry API security hotfix + UX 二次確認(自審發現)
 
 v0.12.0 self-review 抓到兩個跟 v0.10.1 audit 同性質的漏洞 —— retry endpoints 沒有延續 batch endpoints 的安全硬化。4/23 生產前修掉。

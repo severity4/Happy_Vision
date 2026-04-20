@@ -108,6 +108,29 @@ def retry_failed():
     })
 
 
+@results_bp.route("/detail", methods=["POST"])
+def get_result_detail():
+    """Look up a single result by file path via POST body.
+
+    Why POST:GET /<path:file_path> doesn't survive URL-encoded absolute
+    paths — encodeURIComponent turns `/Users/...` into `%2FUsers%2F...`,
+    Werkzeug unquotes back to `//Users/...`, and the path converter
+    fails to match the double slash. Every dogfood click on a "最近結果"
+    green-light row fell through to 404 → UI's "找不到詳情" branch, even
+    though the row had a complete result_json. POST body sidesteps the
+    whole URL-pathing dance. (v0.13.4 fix.)"""
+    data = request.get_json(silent=True) or {}
+    file_path = data.get("file_path") or data.get("path") or ""
+    if not isinstance(file_path, str) or not file_path:
+        return jsonify({"error": "file_path required"}), 400
+    with ResultStore() as store:
+        result = store.get_result_with_usage(file_path)
+    if result is None:
+        return jsonify({"error": "Result not found"}), 404
+    result["file_path"] = file_path
+    return jsonify(result)
+
+
 @results_bp.route("/<path:file_path>", methods=["GET"])
 def get_result(file_path):
     with ResultStore() as store:

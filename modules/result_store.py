@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime
@@ -12,10 +13,41 @@ from modules.config import get_config_dir
 log = logging.getLogger(__name__)
 
 
+def _assert_not_polluting_real_home(db_path: Path) -> None:
+    """Trip wire: under pytest, refuse to touch the developer's real
+    ~/.happy-vision/ DB. Background threads from watcher tests used to
+    outlive the monkeypatch that redirected HAPPY_VISION_HOME, then wrote
+    pytest tmp_path rows into the real DB — silently corrupting the user's
+    local results.
+
+    We detect pytest via `sys.modules["pytest"]` (not PYTEST_CURRENT_TEST,
+    which is cleared between test items so leaked threads writing in the
+    gap window escape). Production never imports pytest, so runtime cost
+    is a single dict lookup."""
+    import sys
+    if "pytest" not in sys.modules:
+        return
+    try:
+        real_home = Path.home().expanduser().resolve()
+        target = db_path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return  # Can't resolve? Don't block — better than a false-positive.
+    forbidden = real_home / ".happy-vision"
+    if forbidden == target.parent or forbidden in target.parents:
+        raise RuntimeError(
+            f"ResultStore refusing to open real-home DB during pytest: {target}. "
+            "Either a test didn't set HAPPY_VISION_HOME, OR a background "
+            "thread outlived its fixture's monkeypatch (check api/watch.py "
+            "watcher teardown). This guard exists because of the 2026-04 incident "
+            "where 134 pytest-tmp rows polluted the developer's real DB."
+        )
+
+
 class ResultStore:
     def __init__(self, db_path: Path | str | None = None):
         if db_path is None:
             db_path = get_config_dir() / "results.db"
+        _assert_not_polluting_real_home(Path(db_path))
         self._lock = threading.Lock()
         self.db_path = self._resolve_db_path(Path(db_path))
         try:

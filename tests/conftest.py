@@ -77,6 +77,37 @@ def _authed_test_client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stop_leaked_watcher():
+    """Teardown watcher daemon threads so they can't outlive the test and
+    write into the real home DB via `ResultStore()` after monkeypatch
+    rolls back HAPPY_VISION_HOME.
+
+    Caused the 2026-04 incident: 134 pytest tmp_path rows landed in the
+    developer's real ~/.happy-vision/results.db because watcher threads
+    kept running past their fixture's teardown. The ResultStore watchdog
+    now catches leaks at the DB layer, but stopping the thread here is
+    the real fix — cleaner logs, no silent daemon crashes, faster suite."""
+    yield
+    try:
+        import api.watch as watch_mod
+    except Exception:
+        return
+    w = getattr(watch_mod, "_watcher", None)
+    if w is not None and getattr(w, "_state", None) != "stopped":
+        try:
+            w.stop()
+        except Exception:
+            pass
+    shared = getattr(watch_mod, "_shared_store", None)
+    if shared is not None:
+        try:
+            shared.close()
+        except Exception:
+            pass
+        watch_mod._shared_store = None
+
+
+@pytest.fixture(autouse=True)
 def _prevent_real_gemini(monkeypatch):
     """Prevent tests from accidentally instantiating the real genai.Client.
 
