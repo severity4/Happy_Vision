@@ -24,6 +24,10 @@ DEFAULT_CONFIG = {
     "write_metadata": False,
     "skip_existing": False,
     "watch_folder": "",
+    # Where export buttons (PDF / CSV / JSON / 診斷) save their output.
+    # Empty = fall back to ~/Downloads at save time. Users can change via
+    # the Settings page's folder picker. Same storage semantics as watch_folder.
+    "export_folder": "",
     "watch_enabled": False,
     "watch_concurrency": 1,
     "watch_interval": 10,

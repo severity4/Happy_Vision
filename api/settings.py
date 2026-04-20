@@ -117,7 +117,8 @@ def update_settings():
             config[bkey] = bool(data[bkey])
 
     # --- Free-form strings (length-capped to avoid misuse) ---
-    for skey in ("tester_name", "machine_name", "app_version", "watch_folder"):
+    for skey in ("tester_name", "machine_name", "app_version",
+                 "watch_folder", "export_folder"):
         if skey in data:
             v = data[skey]
             if not isinstance(v, str):

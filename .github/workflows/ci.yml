@@ -48,6 +48,7 @@ jobs:
       - name: Run tests (pytest)
         env:
           PYTHONPATH: .
+          HERMETIC_TESTS: '1'
         run: |
           pytest -q --maxfail=1 --junitxml=report.xml
 

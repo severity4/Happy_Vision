@@ -180,3 +180,61 @@ def test_save_avoids_overwriting_existing_file(
     # Both files present
     assert saved1.exists()
     assert saved2.exists()
+
+
+# ---------- user-configurable export_folder (v0.13.3) ----------
+
+def test_save_honors_user_configured_export_folder(
+    client, seeded_store, monkeypatch, tmp_path,
+):
+    """When config has `export_folder` set to a valid dir, _downloads_dir
+    resolves to that instead of ~/Downloads. Removes the monkeypatch on
+    _downloads_dir so the real resolver is exercised."""
+    user_dir = tmp_path / "my_exports"
+    user_dir.mkdir()
+
+    def _fake_load_config():
+        return {"export_folder": str(user_dir)}
+
+    monkeypatch.setattr(api_export, "load_config", _fake_load_config)
+
+    r = client.post("/api/export/save/csv")
+    assert r.status_code == 200
+    saved = Path(r.get_json()["saved"])
+    assert saved.parent == user_dir, (
+        f"expected save in {user_dir}, got {saved.parent}"
+    )
+    assert saved.exists()
+
+
+def test_save_falls_back_to_downloads_when_configured_folder_missing(
+    client, fake_downloads, seeded_store, monkeypatch,
+):
+    """User configured /mnt/ext/backup but the external drive is ejected.
+    _downloads_dir must fall back to ~/Downloads instead of 500-ing."""
+    def _fake_load_config():
+        return {"export_folder": "/nonexistent/ejected-drive/Reports"}
+
+    monkeypatch.setattr(api_export, "load_config", _fake_load_config)
+
+    r = client.post("/api/export/save/csv")
+    assert r.status_code == 200
+    saved = Path(r.get_json()["saved"])
+    # Fell back to the fake_downloads tmp path
+    assert saved.parent == fake_downloads
+
+
+def test_save_treats_empty_export_folder_as_unset(
+    client, fake_downloads, seeded_store, monkeypatch,
+):
+    """Empty string in config (default / cleared by user) must be treated
+    as "not configured" → ~/Downloads, not "current working dir"."""
+    def _fake_load_config():
+        return {"export_folder": ""}
+
+    monkeypatch.setattr(api_export, "load_config", _fake_load_config)
+
+    r = client.post("/api/export/save/csv")
+    assert r.status_code == 200
+    saved = Path(r.get_json()["saved"])
+    assert saved.parent == fake_downloads

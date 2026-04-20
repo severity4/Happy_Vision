@@ -42,6 +42,8 @@ jobs:
           npm run build
 
       - name: Start backend
+        env:
+          HERMETIC_TESTS: '1'
         run: |
           python3 web_ui.py &> server.log &
           echo $! > server.pid

@@ -19,7 +19,23 @@ export_bp = Blueprint("export", __name__, url_prefix="/api/export")
 
 
 def _downloads_dir() -> Path:
-    """User's Downloads folder. macOS / Linux standard location."""
+    """Resolve the export target folder.
+
+    Precedence:
+      1. `export_folder` in config (user-chosen via Settings); must be an
+         existing directory we can write to. Falls through if the folder
+         vanishes (e.g., external drive ejected).
+      2. `~/Downloads` — created if absent.
+    """
+    cfg = load_config()
+    user_dir = str(cfg.get("export_folder") or "").strip()
+    if user_dir:
+        p = Path(user_dir).expanduser()
+        try:
+            if p.is_dir():
+                return p
+        except OSError:
+            pass  # unreadable → fall through
     d = Path.home() / "Downloads"
     d.mkdir(exist_ok=True)
     return d

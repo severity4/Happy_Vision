@@ -97,6 +97,21 @@ def _prevent_real_gemini(monkeypatch):
     import modules.gemini_batch as _gb
 
     # Replace the genai module object with a tiny shim exposing Client only.
-    monkeypatch.setattr(_gv, "genai", type("_shim", (), {"Client": _FailingClient}))
-    monkeypatch.setattr(_gb, "genai", type("_shim", (), {"Client": _FailingClient}))
+    # If HERMETIC_TESTS=1 or a recordings file exists, wire in FakeClient so
+    # tests can run without calling the real Gemini API. Otherwise keep the
+    # failing shim to prevent accidental real calls.
+    import os
+    recordings_path = os.environ.get("HERMETIC_RECORDINGS_PATH") or "tests/fixtures/gemini/recordings.json"
+    if os.path.exists(recordings_path) or os.environ.get("HERMETIC_TESTS") == "1":
+        try:
+            from tests.fixtures.gemini.fake_genai import Client as FakeClient
+            monkeypatch.setattr(_gv, "genai", type("_shim", (), {"Client": FakeClient}))
+            monkeypatch.setattr(_gb, "genai", type("_shim", (), {"Client": FakeClient}))
+        except Exception:
+            # fallback to failing shim if import fails
+            monkeypatch.setattr(_gv, "genai", type("_shim", (), {"Client": _FailingClient}))
+            monkeypatch.setattr(_gb, "genai", type("_shim", (), {"Client": _FailingClient}))
+    else:
+        monkeypatch.setattr(_gv, "genai", type("_shim", (), {"Client": _FailingClient}))
+        monkeypatch.setattr(_gb, "genai", type("_shim", (), {"Client": _FailingClient}))
     yield

@@ -1,0 +1,12 @@
+{
+  "analyze_photo": {
+    "default": {
+      "text": "{\"title\": \"Recorded Photo\", \"description\": \"Recorded response\", \"keywords\": [\"recorded\"], \"category\": \"other\", \"subcategory\": \"\", \"scene_type\": \"indoor\", \"mood\": \"neutral\", \"people_count\": 0, \"identified_people\": [], \"ocr_text\": []}",
+      "usage_metadata": {"prompt_token_count": 10, "candidates_token_count": 2, "total_token_count": 12}
+    }
+  },
+  "batch": {
+    "files/download": "",
+    "batches/get": {"state": {"name": "JOB_STATE_SUCCEEDED"}, "dest": {"file_name": "files/out"}}
+  }
+}

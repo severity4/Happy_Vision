@@ -77,7 +77,7 @@
             >← 上一層</button>
             <div class="flex-1 text-xs font-mono text-text-secondary truncate">{{ browserData.current || '—' }}</div>
             <button
-              @click="selectWatchFolder(browserData.current)"
+              @click="selectFolder(browserData.current)"
               class="bg-accent-violet hover:bg-accent-violet-dim text-white font-mono text-[11px] tracking-wider px-3 py-1 rounded transition-colors"
             >選擇此資料夾</button>
             <button
@@ -98,6 +98,36 @@
               <span class="text-sm font-mono text-text-primary truncate flex-1">{{ item.name }}</span>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- Export Folder -->
+      <section class="border border-border-default bg-surface-1 rounded-md overflow-hidden">
+        <div class="flex items-center justify-between p-5 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="led" :class="exportFolder ? 'led-accent' : ''"></span>
+            <span class="kicker" style="color: var(--color-text-primary)">EXPORT FOLDER · 匯出資料夾</span>
+          </div>
+          <span class="font-mono text-[11px]" :class="exportFolder ? 'text-accent-violet' : 'text-text-tertiary'">
+            {{ exportFolder ? '已設定' : '預設 ~/Downloads' }}
+          </span>
+        </div>
+        <div class="px-5 pb-5">
+          <div v-if="exportFolder" class="flex items-center gap-2 bg-surface-0 border border-border-default rounded px-3 py-2">
+            <span class="text-accent-violet font-mono text-xs flex-shrink-0">▸</span>
+            <span class="text-sm font-mono text-text-primary truncate flex-1">{{ exportFolder }}</span>
+            <button @click="openExportBrowser" class="font-mono text-[11px] tracking-wider text-accent-violet hover:text-accent-violet-dim transition-colors">更換</button>
+          </div>
+          <button
+            v-else
+            @click="openExportBrowser"
+            class="w-full bg-surface-0 border border-dashed border-border-default hover:border-accent-violet/40 rounded px-3 py-4 font-mono text-sm text-text-secondary hover:text-text-primary transition-colors"
+          >
+            + 選擇匯出資料夾（PDF / CSV / JSON / 診斷會存到這裡）
+          </button>
+          <p class="text-[11px] text-text-tertiary mt-3 leading-relaxed">
+            預設存到 <code class="font-mono text-[11px] px-1.5 py-0.5 bg-surface-0 rounded border border-border-default">~/Downloads</code>，換成 Lucid 或 iCloud 同步資料夾也沒問題。
+          </p>
         </div>
       </section>
 
@@ -491,7 +521,11 @@ async function openExternal(url) {
 }
 
 const watchFolder = ref('')
+const exportFolder = ref('')
 const showBrowser = ref(false)
+// Which folder the inline picker is currently selecting for. Lets one
+// browser component serve both the watch-folder and export-folder sections.
+const browserMode = ref('watch')  // 'watch' | 'export'
 const browserData = ref({ current: '', parent: null, items: [] })
 const browserLoading = ref(false)
 
@@ -561,6 +595,7 @@ onMounted(async () => {
   concurrency.value = Math.min(10, Math.max(1, store.settings.watch_concurrency || store.settings.concurrency || 1))
   skipExisting.value = store.settings.skip_existing || false
   watchFolder.value = store.settings.watch_folder || ''
+  exportFolder.value = store.settings.export_folder || ''
   rpm.value = Math.min(5000, Math.max(1, store.settings.rate_limit_rpm || 60))
   imageMaxSize.value = [1024, 1536, 2048, 3072].includes(store.settings.image_max_size)
     ? store.settings.image_max_size
@@ -621,8 +656,15 @@ async function saveConcurrency() {
 }
 
 async function openBrowser() {
+  browserMode.value = 'watch'
   showBrowser.value = true
   await navigateTo(watchFolder.value || '')
+}
+
+async function openExportBrowser() {
+  browserMode.value = 'export'
+  showBrowser.value = true
+  await navigateTo(exportFolder.value || '')
 }
 
 async function navigateTo(path) {
@@ -634,6 +676,16 @@ async function navigateTo(path) {
     if (!data.error) browserData.value = data
   } catch {}
   browserLoading.value = false
+}
+
+async function selectFolder(path) {
+  if (browserMode.value === 'export') {
+    exportFolder.value = path
+    showBrowser.value = false
+    await store.updateSettings({ export_folder: path })
+  } else {
+    await selectWatchFolder(path)
+  }
 }
 
 async function selectWatchFolder(path) {
